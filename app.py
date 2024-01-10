@@ -35,8 +35,15 @@ class EntryType(Enum):
     PICTURE = 5
     
 class CTkLabelEx(customtkinter.CTkLabel):
-    def __init__(self, master, text, text_color, image = None, fg_color="transparent"):
-        customtkinter.CTkLabel.__init__(self, master=master, text=text, text_color=text_color, image=image, fg_color=fg_color)
+    def __init__(self, master, width, height, text, text_color, image = None, fg_color="black", compound="center"):
+        customtkinter.CTkLabel.__init__(self, master=master, 
+                                        text=text, 
+                                        text_color=text_color, 
+                                        image=image, 
+                                        fg_color=fg_color, 
+                                        width=width, 
+                                        height=height,
+                                        compound=compound)
         self.metadata = {}
     
     def set_metadata(self, md):
@@ -49,6 +56,13 @@ class App(customtkinter.CTk):
     def __init__(self):
         super().__init__()
         
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        
+        # Main frame
+        self.main_frame = customtkinter.CTkScrollableFrame(self, width=WIDTH, height=HEIGHT)
+        self.main_frame.grid(row=0, column=0, padx=0, pady=0)
+        
         self.title("Manga4Deck")
         self.geometry(f"{WIDTH}x{HEIGHT}")
         
@@ -60,10 +74,6 @@ class App(customtkinter.CTk):
         self.bind("<Key>", self.key_handler)
         self.bind("<Left>", self.previous_page)
         self.bind("<Right>", self.next_page)
-        
-        for child in self.winfo_children():
-            child.focus()
-            break
         
     def key_handler(self, event):
         print(event.char, event.keysym, event.keycode)
@@ -92,46 +102,49 @@ class App(customtkinter.CTk):
                 col = int(i % 8)
                 row = int(i / 8)
                 
-                tile = customtkinter.CTkFrame(self.master, width=150, height=200, corner_radius=5,)
-                tile.grid(row=row, column=col, padx=5, pady=5)
-                
                 # add image and title
+                title = entry["title"][0:14] + "..." if len(entry["title"]) > 13 else entry["title"]
+                
                 if state == EntryType.SERIE:
                     filepath = self.kavita.get_serie_cover(entry["id"])
                     img = ImageTk.PhotoImage(Image.open(filepath).resize((150, 200))) 
                 elif state == EntryType.VOLUME:
                     filepath = self.kavita.get_volume_cover(entry["id"])
                     img = ImageTk.PhotoImage(Image.open(filepath).resize((150, 200))) 
+                    title = entry["title"]
                 else:
                     img = ImageTk.PhotoImage(Image.open(THUMB_PATH).resize((150, 200)))
-                title = entry["title"][0:14] + "..." if len(entry["title"]) > 13 else entry["title"]
-                label = CTkLabelEx(tile, text=title, text_color='white', fg_color="black" )
+                
+                label = CTkLabelEx(self.main_frame, 
+                                   text=title, 
+                                   text_color='white',
+                                   fg_color="black", 
+                                   width=150, 
+                                   height=200,
+                                   compound="bottom")
                 label.configure(image=img)
                 label.set_metadata(entry)
-                label.place(relx=.5, rely=.5, anchor='center')
+                # label.place(x=20, y=20)
                 label.bind("<Double-1>", self.OnDoubleClick)
-                label.pack()
+                label.grid(row=row, column=col, padx=5, pady=5)
                 
     def draw_pic(self, filepath, left = False, first_small = False):
-        tile_w = PIC_WIDTH if first_small else 1280
-        tile = customtkinter.CTkFrame(self.master, 
-                                      width=tile_w if not left else tile_w+ 200, 
-                                      height=PIC_HEIGHT if first_small else BIG_PIC_HEIGHT)
-        tile.grid(
-            row=0, 
-            column=0 if left else 1, 
-            padx=0, 
-            pady=0
-        )
-        img = ImageTk.PhotoImage(Image.open(filepath).resize((
-            PIC_WIDTH if first_small else BIG_PIC_WIDTH, 
-            PIC_HEIGHT if first_small else BIG_PIC_HEIGHT
-        )))
-        label = CTkLabelEx(tile, text="", text_color='white', fg_color="black", image=img)
-        label.place(relx=.5, rely=.5, anchor='center',)
+        w = PIC_WIDTH if first_small else BIG_PIC_WIDTH
+        h = PIC_HEIGHT if first_small else BIG_PIC_HEIGHT
+        row = 0
+        col = 0 if left else 1
+        if first_small:
+            padx = (120, 30) if left else (0, 0)
+        else:
+            padx = (170, 0)
+        img = ImageTk.PhotoImage(Image.open(filepath).resize((w, h)))
+        label = CTkLabelEx(self.main_frame, text="", text_color='white', fg_color="black", width=w, height=h)
+        label.configure(image=img)
+        label.place(relx=.5, rely=.5, anchor='center')
+        label.grid(row=row, column=col, padx=padx, pady=5)
             
     def clean_master(self):
-        for child in self.winfo_children():
+        for child in self.main_frame.winfo_children():
             child.destroy()
         
     def back_in_history(self, event):
