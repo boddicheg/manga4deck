@@ -1,5 +1,3 @@
 tk
 customtkinter
 pillow
-lxml
-feedparser
