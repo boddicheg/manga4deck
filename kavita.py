@@ -17,8 +17,6 @@ class KavitaAPI():
 
         self.cache_thumbnail = []
         self.cache_thumbnail_file = CACHE_FOLDER + "/cache_thumbnail.json"
-        # self.cache_manga = []
-        # self.cache_manga_file = CACHE_FOLDER + "/cache_manga.json"
         
         if not os.path.exists(self.cache_thumbnail_file):
             with open(self.cache_thumbnail_file, 'w') as f:
@@ -26,6 +24,16 @@ class KavitaAPI():
         else:
             with open(self.cache_thumbnail_file, 'r') as f:
                 self.cache_thumbnail = json.load(f)
+                
+        self.cache_manga = []
+        self.cache_manga_file = CACHE_FOLDER + "/cache_manga.json"
+        
+        if not os.path.exists(self.cache_manga_file):
+            with open(self.cache_thumbnail_file, 'w') as f:
+                f.write(json.dumps(self.cache_manga, indent=4))
+        else:
+            with open(self.cache_manga_file, 'r') as f:
+                self.cache_manga = json.load(f)
 
         response = requests.post(
             self.url + "Account/login", 
@@ -50,16 +58,34 @@ class KavitaAPI():
     def destuctor(self):
         with open(self.cache_thumbnail_file, 'w') as f:
             f.write(json.dumps(self.cache_thumbnail, indent=4))
+        with open(self.cache_manga_file, 'w') as f:
+            f.write(json.dumps(self.cache_manga, indent=4))
         
-    def search_in_cache(self, key, value):
+    def search_in_cover_cache(self, key, value):
         for e in self.cache_thumbnail:
             if key in e.keys() and e[key] == value:
                 return e["file"]
         return ""
     
-    def store_in_cache(self, key, value, filename):
+    def store_in_cover_cache(self, key, value, filename):
         self.cache_thumbnail.append({
             key: value,
+            "file": filename
+        })
+        
+    def search_in_manga_cache(self, key1, value1, key2, value2):
+        for e in self.cache_thumbnail:
+            if key1 in e.keys() and \
+               key2 in e.keys() and \
+               e[key1] == value1 and \
+               e[key2] == value2:
+                return e["file"]
+        return ""
+    
+    def store_in_manga_cache(self, key1, value1, key2, value2, filename):
+        self.cache_thumbnail.append({
+            key1: value1,
+            key2: value2,
             "file": filename
         })
 
@@ -111,7 +137,7 @@ class KavitaAPI():
         return result
     
     def get_serie_cover(self, serie):
-        filename = self.search_in_cache("seriesId", serie)
+        filename = self.search_in_cover_cache("seriesId", serie)
         if len(filename) > 0:
             return filename
         
@@ -129,11 +155,11 @@ class KavitaAPI():
         with open(filename, 'wb') as f:
             f.write(response.content)
             
-        self.store_in_cache("seriesId", serie, filename)
+        self.store_in_cover_cache("seriesId", serie, filename)
         return filename
     
     def get_volume_cover(self, volume):
-        filename = self.search_in_cache("volumeId", volume)
+        filename = self.search_in_cover_cache("volumeId", volume)
         if len(filename) > 0:
             return filename
 
@@ -151,7 +177,7 @@ class KavitaAPI():
         with open(filename, 'wb') as f:
             f.write(response.content)
             
-        self.store_in_cache("volumeId", volume, filename)
+        self.store_in_cover_cache("volumeId", volume, filename)
         return filename
         
     def get_volumes(self, parent):
@@ -173,7 +199,7 @@ class KavitaAPI():
                     result.append({
                         "id": vol['id'],
                         "chapter_id": chapter_id,
-                        "title": vol["name"] + f"({vol['pagesRead']}/{vol['pages']})",
+                        "title": vol["name"] + f"\n({vol['pagesRead']}/{vol['pages']})",
                         "read": vol['pagesRead'],
                         "pages": vol['pages']
                     })
@@ -182,6 +208,9 @@ class KavitaAPI():
     
     def get_picture(self, id, page):
         # http://192.168.5.49:5001/api/reader/image?chapterId=1498&apiKey=8df0fde8-8229-464c-ae0c-fd58a1a35b11&page=3
+        filename = self.search_in_manga_cache("chapterId", id, "page", page)
+        if len(filename) > 0:
+            return filename
         url = self.url + f"reader/image?chapterId={id}&apiKey={self.api_key}&page={page}"
         print(f"url: {url}")
         response = requests.get(
@@ -194,7 +223,7 @@ class KavitaAPI():
         
         with open(filename, 'wb') as f:
             f.write(response.content)
-        
+        self.store_in_manga_cache("chapterId", id, "page", page, filename)
         return filename
     
     def save_progress(self, ids):
