@@ -15,13 +15,13 @@ THUMB_PATH = "./assets/thumbnail.png"
 CACHE_PATH = "./cache"
 
 WIDTH = 1280
-HEIGHT = 720
+HEIGHT = 800
 
 PIC_WIDTH = 496
-PIC_HEIGHT = 720
+PIC_HEIGHT = 800
 
 BIG_PIC_WIDTH = 960
-BIG_PIC_HEIGHT = 720
+BIG_PIC_HEIGHT = 800
 
 username = "boddicheg"
 password = "dyd6ZNU.aby*mqd6fwd"
@@ -71,7 +71,6 @@ class App(customtkinter.CTk):
         self.draw()
 
         self.bind("<BackSpace>", self.back_in_history)
-        self.bind("<Key>", self.key_handler)
         self.bind("<Left>", self.previous_page)
         self.bind("<Right>", self.next_page)
         self.bind("<Down>", self.scroll_down)
@@ -85,9 +84,6 @@ class App(customtkinter.CTk):
         
     def scroll_up(self, event):
         self.main_frame._parent_canvas.yview_scroll(-1, "units")
-        
-    def key_handler(self, event):
-        print(event.char, event.keysym, event.keycode)
         
     def draw(self):
         entries = []
@@ -115,6 +111,7 @@ class App(customtkinter.CTk):
                 
                 # add image and title
                 title = entry["title"][0:14] + "..." if len(entry["title"]) > 13 else entry["title"]
+                completed = False
                 
                 if state == EntryType.SERIE:
                     filepath = self.kavita.get_serie_cover(entry["id"])
@@ -123,19 +120,19 @@ class App(customtkinter.CTk):
                     filepath = self.kavita.get_volume_cover(entry["id"])
                     img = ImageTk.PhotoImage(Image.open(filepath).resize((150, 200))) 
                     title = entry["title"]
+                    completed = entry["pages"] == entry["read"]
                 else:
                     img = ImageTk.PhotoImage(Image.open(THUMB_PATH).resize((150, 200)))
                 
                 label = CTkLabelEx(self.main_frame, 
                                    text=title, 
                                    text_color='white',
-                                   fg_color="black", 
+                                   fg_color="black" if not completed else "green", 
                                    width=150, 
                                    height=200,
                                    compound="bottom")
                 label.configure(image=img)
                 label.set_metadata(entry)
-                # label.place(x=20, y=20)
                 label.bind("<Button-1>", self.OnSingleClick)
                 label.bind("<FocusIn>", self.OnFocusIn)
                 label.bind("<FocusOut>", self.OnFocusOut)
@@ -163,9 +160,10 @@ class App(customtkinter.CTk):
     def back_in_history(self, event):
         if len(self.history) > 1:
             self.history.pop()
+            self.main_frame._parent_canvas.yview_scroll(-100, "pages")
             self.clean_master()
             self.draw()
-        
+
     def OnSingleClick(self, event):
         self.focused = 0
         metadata = event.widget.master.get_metadata()
