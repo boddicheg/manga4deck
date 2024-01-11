@@ -81,10 +81,10 @@ class App(customtkinter.CTk):
         self.focused = 0
     
     def scroll_down(self, event):
-        self.main_frame._parent_canvas.yview_scroll(20, "units")
+        self.main_frame._parent_canvas.yview_scroll(1, "units")
         
     def scroll_up(self, event):
-        self.main_frame._parent_canvas.yview_scroll(-20, "units")
+        self.main_frame._parent_canvas.yview_scroll(-1, "units")
         
     def key_handler(self, event):
         print(event.char, event.keysym, event.keycode)
