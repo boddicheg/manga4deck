@@ -5,6 +5,11 @@ Reader for SteamDeck, developing only for reading manga using Kavita selfhosted 
 
 <a name="download" href="https://raw.githubusercontent.com/boddicheg/manga4deck/main/installer.desktop">Download .desktop</a>
 
+Screenshots:
+----
+![pic1](assets/manga4deck.jpg)
+![pic1](assets/manga4deck_2.jpg)
+
 Steam Deck mappings:
 ----
 Buttons:
