@@ -13,6 +13,9 @@ class KavitaAPI():
         self.url = url
         self.api_key = api_key
         
+        if not os.path.exists(CACHE_FOLDER):
+            os.mkdir(CACHE_FOLDER)
+        
         atexit.register(self.destuctor)
 
         self.cache_thumbnail = []
