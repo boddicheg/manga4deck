@@ -1,3 +1,5 @@
 tk
 customtkinter
 pillow
+requests
+icecream

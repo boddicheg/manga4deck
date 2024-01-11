@@ -74,6 +74,17 @@ class App(customtkinter.CTk):
         self.bind("<Key>", self.key_handler)
         self.bind("<Left>", self.previous_page)
         self.bind("<Right>", self.next_page)
+        self.bind("<Down>", self.scroll_down)
+        self.bind("<Up>", self.scroll_up)
+        self.bind("<Return>", self.enter_to)
+        
+        self.focused = 0
+    
+    def scroll_down(self, event):
+        self.main_frame._parent_canvas.yview_scroll(20, "units")
+        
+    def scroll_up(self, event):
+        self.main_frame._parent_canvas.yview_scroll(-20, "units")
         
     def key_handler(self, event):
         print(event.char, event.keysym, event.keycode)
@@ -125,7 +136,9 @@ class App(customtkinter.CTk):
                 label.configure(image=img)
                 label.set_metadata(entry)
                 # label.place(x=20, y=20)
-                label.bind("<Double-1>", self.OnDoubleClick)
+                label.bind("<Button-1>", self.OnSingleClick)
+                label.bind("<FocusIn>", self.OnFocusIn)
+                label.bind("<FocusOut>", self.OnFocusOut)
                 label.grid(row=row, column=col, padx=5, pady=5)
                 
     def draw_pic(self, filepath, left = False, first_small = False):
@@ -153,7 +166,8 @@ class App(customtkinter.CTk):
             self.clean_master()
             self.draw()
         
-    def OnDoubleClick(self, event):
+    def OnSingleClick(self, event):
+        self.focused = 0
         metadata = event.widget.master.get_metadata()
         last_in_history = self.history[-1]["type"]
         
@@ -175,15 +189,22 @@ class App(customtkinter.CTk):
         self.clean_master()
         self.draw()
         
+    def OnFocusIn(self, event):
+        event.widget.master.configure(text_color="red")
+
+    def OnFocusOut(self, event):
+        event.widget.master.configure(text_color="white")
+        
     def is_small_pic(self, filepath):
         image = Image.open(filepath)
         return (image.width / image.height) < 1.0
 
     def previous_page(self, event):
-        self.clean_master()
+        
         last_in_history = self.history[-1]["type"]
         
         if last_in_history == EntryType.PICTURE:
+            self.clean_master()
             chapter_id = self.history[-1]["chapter_id"]
             current_page = self.history[-1]["read"]
             if current_page > 0:
@@ -198,12 +219,16 @@ class App(customtkinter.CTk):
                     self.history[-1]["read"] += 1
                     filepath = self.kavita.get_picture(chapter_id, self.history[-1]["read"])
                     self.draw_pic(filepath, False, draw_both)
-    
+        else:
+            if self.focused - 1 >= 0:
+                self.focused -= 1
+                self.main_frame.winfo_children()[self.focused].focus()
+                
     def next_page(self, event):
-        self.clean_master()
         last_in_history = self.history[-1]["type"]
         
         if last_in_history == EntryType.PICTURE:
+            self.clean_master()
             chapter_id = self.history[-1]["chapter_id"]
             current_page = self.history[-1]["read"]
             if current_page <= self.history[-1]["pages"]:
@@ -239,7 +264,15 @@ class App(customtkinter.CTk):
                         progress["pageNum"] = e["read"]
 
                 self.kavita.save_progress(progress)
-        
+        else:
+            count = len(self.main_frame.winfo_children())
+            if self.focused < count:
+                self.main_frame.winfo_children()[self.focused].focus()
+                self.focused += 1
+
+    def enter_to(self, event):
+        self.main_frame.focus_get().event_generate("<Button-1>")
+
 if __name__ == "__main__":
     app = App()
     app.mainloop()
