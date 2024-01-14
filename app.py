@@ -10,9 +10,26 @@ import io
 customtkinter.set_appearance_mode("Dark")  # Modes: "System" (standard), "Dark", "Light"
 customtkinter.set_default_color_theme("dark-blue")  # Themes: "blue" (standard), "green", "dark-blue"
 
+class DisplayType(Enum):
+    TWOPICSSIDEBYSIDE = 1
+    SINGLE = 2
+
+class EntryType(Enum):
+    SHELF = 1
+    LIBRARY = 2
+    SERIE = 3
+    VOLUME = 4
+    PICTURE = 5
+
 URL = "http://192.168.5.49:5001/api/"
 THUMB_PATH = "./assets/thumbnail.png"
 CACHE_PATH = "./cache"
+
+username = "boddicheg"
+password = "dyd6ZNU.aby*mqd6fwd"
+api_key = "8df0fde8-8229-464c-ae0c-fd58a1a35b11"
+
+DISPLAY_TYPE = DisplayType.SINGLE
 
 WIDTH = 1280
 HEIGHT = 800
@@ -23,17 +40,6 @@ PIC_HEIGHT = 800
 BIG_PIC_WIDTH = 960
 BIG_PIC_HEIGHT = 800
 
-username = "boddicheg"
-password = "dyd6ZNU.aby*mqd6fwd"
-api_key = "8df0fde8-8229-464c-ae0c-fd58a1a35b11"
-
-class EntryType(Enum):
-    SHELF = 1
-    LIBRARY = 2
-    SERIE = 3
-    VOLUME = 4
-    PICTURE = 5
-    
 class CTkLabelEx(customtkinter.CTkLabel):
     def __init__(self, master, width, height, text, text_color, image = None, fg_color="black", compound="center"):
         customtkinter.CTkLabel.__init__(self, master=master, 
@@ -139,19 +145,32 @@ class App(customtkinter.CTk):
                 label.grid(row=row, column=col, padx=5, pady=5)
                 
     def draw_pic(self, filepath, left = False, first_small = False):
-        w = PIC_WIDTH if first_small else BIG_PIC_WIDTH
-        h = PIC_HEIGHT if first_small else BIG_PIC_HEIGHT
-        row = 0
-        col = 0 if left else 1
-        if first_small:
-            padx = (120, 30) if left else (0, 0)
-        else:
+        image = Image.open(filepath)
+        if DISPLAY_TYPE == DisplayType.TWOPICSSIDEBYSIDE:
+            w = PIC_WIDTH if first_small else BIG_PIC_WIDTH
+            h = PIC_HEIGHT if first_small else BIG_PIC_HEIGHT
+            row = 0
+            col = 0 if left else 1
+            if first_small:
+                padx = (120, 30) if left else (0, 0)
+            else:
+                padx = (170, 0)
+
+        elif DISPLAY_TYPE == DisplayType.SINGLE:
+            row = 0
+            col = 0
             padx = (170, 0)
-        img = ImageTk.PhotoImage(Image.open(filepath).resize((w, h)))
+            factor = BIG_PIC_WIDTH / image.width
+            w = int(image.width * factor)
+            h = int(image.height * factor)
+            self.main_frame._parent_canvas.yview_scroll(-100, "units")
+            
+        img = ImageTk.PhotoImage(image.resize((w, h)))
         label = CTkLabelEx(self.main_frame, text="", text_color='white', fg_color="black", width=w, height=h)
         label.configure(image=img)
         label.place(relx=.5, rely=.5, anchor='center')
-        label.grid(row=row, column=col, padx=padx, pady=5)
+        label.grid(row=row, column=col, padx=padx, pady=0)
+            
             
     def clean_master(self):
         for child in self.main_frame.winfo_children():
@@ -160,8 +179,10 @@ class App(customtkinter.CTk):
     def back_in_history(self, event):
         if len(self.history) > 1:
             self.history.pop()
-            self.main_frame._parent_canvas.yview_scroll(-100, "pages")
             self.clean_master()
+            self.main_frame.destroy()
+            self.main_frame = customtkinter.CTkScrollableFrame(self, width=WIDTH, height=HEIGHT)
+            self.main_frame.grid(row=0, column=0, padx=0, pady=0)
             self.draw()
 
     def OnSingleClick(self, event):
@@ -206,17 +227,22 @@ class App(customtkinter.CTk):
             chapter_id = self.history[-1]["chapter_id"]
             current_page = self.history[-1]["read"]
             if current_page > 0:
-                print(f"Current position: {chapter_id}, page {current_page - 3}")
-                # Draw two pics: 
-                self.history[-1]["read"] -= 3
-                filepath = self.kavita.get_picture(chapter_id, self.history[-1]["read"])
-                draw_both = self.is_small_pic(filepath)
-                # check w/h result and decide should we draw one or two(first one can be big)
-                self.draw_pic(filepath, True, draw_both)
-                if draw_both:
-                    self.history[-1]["read"] += 1
+                if DISPLAY_TYPE == DisplayType.TWOPICSSIDEBYSIDE:
+                    print(f"Current position: {chapter_id}, page {current_page - 3}")
+                    # Draw two pics: 
+                    self.history[-1]["read"] -= 3
                     filepath = self.kavita.get_picture(chapter_id, self.history[-1]["read"])
-                    self.draw_pic(filepath, False, draw_both)
+                    draw_both = self.is_small_pic(filepath)
+                    # check w/h result and decide should we draw one or two(first one can be big)
+                    self.draw_pic(filepath, True, draw_both)
+                    if draw_both:
+                        self.history[-1]["read"] += 1
+                        filepath = self.kavita.get_picture(chapter_id, self.history[-1]["read"])
+                        self.draw_pic(filepath, False, draw_both)
+                elif DISPLAY_TYPE == DisplayType.SINGLE:
+                    self.history[-1]["read"] -= 1
+                    filepath = self.kavita.get_picture(chapter_id, self.history[-1]["read"])
+                    self.draw_pic(filepath, False, False)
         else:
             if self.focused - 1 >= 0:
                 self.focused -= 1
@@ -224,25 +250,30 @@ class App(customtkinter.CTk):
                 
     def next_page(self, event):
         last_in_history = self.history[-1]["type"]
-        
         if last_in_history == EntryType.PICTURE:
             self.clean_master()
             chapter_id = self.history[-1]["chapter_id"]
             current_page = self.history[-1]["read"]
             if current_page <= self.history[-1]["pages"]:
                 print(f"Current position: {chapter_id}, page {current_page + 1}")
-                # Draw two pics: 
-                self.history[-1]["read"] += 1
-                filepath = self.kavita.get_picture(chapter_id, self.history[-1]["read"])
-                is_first_small = self.is_small_pic(filepath)
-                # check w/h result and decide should we draw one or two(first one can be big)
-                self.draw_pic(filepath, True, is_first_small)
-                if is_first_small:
-                    filepath = self.kavita.get_picture(chapter_id, self.history[-1]["read"] + 1)
-                    is_second_small = self.is_small_pic(filepath)
-                    if is_second_small:
-                        self.history[-1]["read"] += 1
-                        self.draw_pic(filepath, False, is_second_small)
+                if DISPLAY_TYPE == DisplayType.TWOPICSSIDEBYSIDE:
+                    
+                    # Draw two pics: 
+                    self.history[-1]["read"] += 1
+                    filepath = self.kavita.get_picture(chapter_id, self.history[-1]["read"])
+                    is_first_small = self.is_small_pic(filepath)
+                    # check w/h result and decide should we draw one or two(first one can be big)
+                    self.draw_pic(filepath, True, is_first_small)
+                    if is_first_small:
+                        filepath = self.kavita.get_picture(chapter_id, self.history[-1]["read"] + 1)
+                        is_second_small = self.is_small_pic(filepath)
+                        if is_second_small:
+                            self.history[-1]["read"] += 1
+                            self.draw_pic(filepath, False, is_second_small)
+                elif DISPLAY_TYPE == DisplayType.SINGLE:
+                    self.history[-1]["read"] += 1
+                    filepath = self.kavita.get_picture(chapter_id, self.history[-1]["read"])
+                    self.draw_pic(filepath, False, False)
                 # Save Progress
                 progress = {
                     "libraryId": 0,
