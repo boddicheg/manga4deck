@@ -72,7 +72,7 @@ class CTkLabelEx(customtkinter.CTkLabel):
 class App(customtkinter.CTk):
     def __init__(self):
         super().__init__()
-        
+
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
         
@@ -98,9 +98,20 @@ class App(customtkinter.CTk):
         
         self.focused = 0
         
+        self.protocol("WM_DELETE_WINDOW", self.destructor)
+        # atexit.register(self.destructor)
+
+    def destructor(self):
+        print("destructor +")
+        self.kavita.running = False
+        print("destructor -")
+        self.destroy()
+
     def clean_cache(self, event):
+        print("clean_cache +")
         self.kavita.clear_manga_cache()
         self.update()
+        print("clean_cache -")
 
     def update(self):
         self.after(100, self.draw)

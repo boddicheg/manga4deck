@@ -77,9 +77,9 @@ class KavitaAPI():
         self.caching_thread.start()
         
     def destuctor(self):
+        print("kavita destructor +")
         with self.lock:
             self.running = False
-            self.caching_thread.join()
 
         with open(self.cache_thumbnail_file, 'w') as f:
             f.write(json.dumps(self.cache_thumbnail, indent=4))
@@ -87,6 +87,7 @@ class KavitaAPI():
             f.write(json.dumps(self.cache_manga, indent=4))
         with open(self.cache_series_file, 'w') as f:
             f.write(json.dumps(self.cache_series, indent=4))
+        print("kavita destructor -")
     
     def clear_manga_cache(self):
         for e in self.cache_manga:
@@ -121,6 +122,9 @@ class KavitaAPI():
                 cid = v["chapter_id"]
                 pages = v["pages"]
                 for p in range(1, pages + 1):
+                    with self.lock:
+                        if not self.running:
+                            return
                     self.get_picture(cid, p)
                 self.cache_series[-1]["volumes"].append(v["id"])
                 # Update UI
