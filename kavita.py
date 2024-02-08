@@ -63,6 +63,19 @@ class KavitaAPI():
             f.write(json.dumps(self.cache_thumbnail, indent=4))
         with open(self.cache_manga_file, 'w') as f:
             f.write(json.dumps(self.cache_manga, indent=4))
+        print("destuctor + ")
+    
+    def clear_manga_cache(self):
+        for e in self.cache_manga:
+            if os.path.isfile(e["file"]):
+                os.remove(e["file"])
+
+        for e in self.cache_thumbnail:
+            if os.path.isfile(e["file"]):
+                os.remove(e["file"])
+                
+        self.cache_thumbnail = []
+        self.cache_manga = []
         
     def search_in_cover_cache(self, key, value):
         for e in self.cache_thumbnail:
@@ -86,7 +99,7 @@ class KavitaAPI():
         return ""
     
     def store_in_manga_cache(self, key1, value1, key2, value2, filename):
-        self.cache_thumbnail.append({
+        self.cache_manga.append({
             key1: value1,
             key2: value2,
             "file": filename
@@ -134,7 +147,8 @@ class KavitaAPI():
             for e in series:
                 result.append({
                     "id": e["id"],
-                    "title": e["name"]
+                    "title": e["name"],
+                    "read": int(e["pagesRead"]) * 100 / int(e["pages"])
                 })
 
         return result
@@ -231,19 +245,22 @@ class KavitaAPI():
     
     def save_progress(self, ids):
         url = self.url + f"reader/progress"
-        requests.post(
-            url,
-            json = {
-                "libraryId": ids["libraryId"],
-                "seriesId": ids["seriesId"],
-                "volumeId": ids["volumeId"],
-                "chapterId": ids["chapterId"],
-                "pageNum": ids["pageNum"],
-            } ,
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self.token}"
-            }
-        )
+        try:
+            requests.post(
+                url,
+                json = {
+                    "libraryId": ids["libraryId"],
+                    "seriesId": ids["seriesId"],
+                    "volumeId": ids["volumeId"],
+                    "chapterId": ids["chapterId"],
+                    "pageNum": ids["pageNum"],
+                } ,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {self.token}"
+                }
+            )
+        except:
+            pass
         
         
