@@ -40,6 +40,18 @@ PIC_HEIGHT = 800
 BIG_PIC_WIDTH = 960
 BIG_PIC_HEIGHT = 800
 
+# default is in gbytes
+def cache_size(delimiter = 1024 * 1024 * 1024):
+    files = os.listdir(CACHE_PATH)
+    size = 0
+    for f in files:
+        if ".json" in f:
+            continue
+        path = CACHE_PATH + "/" + f
+        stats = os.stat(path)
+        size += stats.st_size
+    return size / delimiter
+
 class CTkLabelEx(customtkinter.CTkLabel):
     def __init__(self, master, width, height, text, text_color, image = None, fg_color="black", compound="center"):
         customtkinter.CTkLabel.__init__(self, master=master, 
@@ -82,8 +94,12 @@ class App(customtkinter.CTk):
         self.bind("<Down>", self.scroll_down)
         self.bind("<Up>", self.scroll_up)
         self.bind("<Return>", self.enter_to)
+        self.bind("<y>", self.clean_cache)
         
         self.focused = 0
+        
+    def clean_cache(self, event):
+        self.kavita.clear_manga_cache()
     
     def scroll_down(self, event):
         self.main_frame._parent_canvas.yview_scroll(1, "units")
@@ -106,7 +122,6 @@ class App(customtkinter.CTk):
             entries = self.kavita.get_series(parent)
         elif state == EntryType.VOLUME:
             entries = self.kavita.get_volumes(parent)
-        
         if state == EntryType.PICTURE:            
             self.history[-1]["read"] -= 1
             self.next_page(None)
@@ -121,12 +136,19 @@ class App(customtkinter.CTk):
                 
                 if state == EntryType.SERIE:
                     filepath = self.kavita.get_serie_cover(entry["id"])
-                    img = ImageTk.PhotoImage(Image.open(filepath).resize((150, 200))) 
+                    img = ImageTk.PhotoImage(Image.open(filepath).resize((150, 200)))
+                    completed = entry["read"] == 100
+                    print(entry["read"])
+                    title += f"\nRead: {entry['read']:.1f}%" 
                 elif state == EntryType.VOLUME:
                     filepath = self.kavita.get_volume_cover(entry["id"])
                     img = ImageTk.PhotoImage(Image.open(filepath).resize((150, 200))) 
                     title = entry["title"]
                     completed = entry["pages"] == entry["read"]
+                elif state == EntryType.SHELF:
+                    cache = cache_size()
+                    title += f"\nCache: {cache:.1f}Gb"
+                    img = ImageTk.PhotoImage(Image.open(THUMB_PATH).resize((150, 200)))
                 else:
                     img = ImageTk.PhotoImage(Image.open(THUMB_PATH).resize((150, 200)))
                 
