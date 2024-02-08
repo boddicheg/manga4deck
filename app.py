@@ -5,7 +5,6 @@ import customtkinter
 from PIL import Image, ImageTk
 from kavita import * 
 from enum import Enum
-import io
 
 customtkinter.set_appearance_mode("Dark")  # Modes: "System" (standard), "Dark", "Light"
 customtkinter.set_default_color_theme("dark-blue")  # Themes: "blue" (standard), "green", "dark-blue"
@@ -95,12 +94,23 @@ class App(customtkinter.CTk):
         self.bind("<Up>", self.scroll_up)
         self.bind("<Return>", self.enter_to)
         self.bind("<y>", self.clean_cache)
+        self.bind("<c>", self.cache_serie)
         
         self.focused = 0
         
     def clean_cache(self, event):
         self.kavita.clear_manga_cache()
-    
+        self.update()
+
+    def update(self):
+        self.after(100, self.draw)
+        
+    def cache_serie(self, event):
+        last_in_history = self.history[-1]
+        if last_in_history["type"] == EntryType.VOLUME:
+            caching_serie = last_in_history["parent_id"]
+            self.kavita.cache_serie(caching_serie, self.update)
+
     def scroll_down(self, event):
         self.main_frame._parent_canvas.yview_scroll(1, "units")
         
@@ -122,6 +132,7 @@ class App(customtkinter.CTk):
             entries = self.kavita.get_series(parent)
         elif state == EntryType.VOLUME:
             entries = self.kavita.get_volumes(parent)
+
         if state == EntryType.PICTURE:            
             self.history[-1]["read"] -= 1
             self.next_page(None)
@@ -133,29 +144,41 @@ class App(customtkinter.CTk):
                 # add image and title
                 title = entry["title"][0:14] + "..." if len(entry["title"]) > 13 else entry["title"]
                 completed = False
+                color = "black"
+                text_color = "white"
                 
                 if state == EntryType.SERIE:
                     filepath = self.kavita.get_serie_cover(entry["id"])
                     img = ImageTk.PhotoImage(Image.open(filepath).resize((150, 200)))
                     completed = entry["read"] == 100
-                    print(entry["read"])
                     title += f"\nRead: {entry['read']:.1f}%" 
+                    if self.kavita.search_in_serie_cache(entry["id"], None):
+                        color = "yellow"
+                        text_color = "black"
                 elif state == EntryType.VOLUME:
+                    print(entry)
                     filepath = self.kavita.get_volume_cover(entry["id"])
                     img = ImageTk.PhotoImage(Image.open(filepath).resize((150, 200))) 
                     title = entry["title"]
                     completed = entry["pages"] == entry["read"]
+                    if self.kavita.search_in_serie_cache(parent, entry["id"]):
+                        color = "yellow"
+                        text_color = "black"
                 elif state == EntryType.SHELF:
                     cache = cache_size()
                     title += f"\nCache: {cache:.1f}Gb"
                     img = ImageTk.PhotoImage(Image.open(THUMB_PATH).resize((150, 200)))
                 else:
                     img = ImageTk.PhotoImage(Image.open(THUMB_PATH).resize((150, 200)))
+                    
+                if completed:
+                    color = "green"
+                    text_color = "white"
                 
                 label = CTkLabelEx(self.main_frame, 
                                    text=title, 
-                                   text_color='white',
-                                   fg_color="black" if not completed else "green", 
+                                   text_color=text_color,
+                                   fg_color=color, 
                                    width=150, 
                                    height=200,
                                    compound="bottom")

@@ -4,6 +4,7 @@ from icecream import ic
 import time 
 import os
 import hashlib
+import threading
 import atexit
 
 CACHE_FOLDER = "./cache"
@@ -37,6 +38,16 @@ class KavitaAPI():
         else:
             with open(self.cache_manga_file, 'r') as f:
                 self.cache_manga = json.load(f)
+                
+        self.cache_series = []
+        self.cache_series_file = CACHE_FOLDER + "/cache_series.json"
+        
+        if not os.path.exists(self.cache_series_file):
+            with open(self.cache_thumbnail_file, 'w') as f:
+                f.write(json.dumps(self.cache_series, indent=4))
+        else:
+            with open(self.cache_series_file, 'r') as f:
+                self.cache_series = json.load(f)
 
         response = requests.post(
             self.url + "Account/login", 
@@ -57,13 +68,25 @@ class KavitaAPI():
             print(f"Logged as {self.logged_as}")
         else:
             raise("[!] Authentification failed!")
+        # --
+        self.lock = threading.Lock()
+        self.caching_series_queue = []
+        self.caching_callback = None
+        self.running = True
+        self.caching_thread = threading.Thread(target=self.cache_serie_threaded)
+        self.caching_thread.start()
         
     def destuctor(self):
+        with self.lock:
+            self.running = False
+            self.caching_thread.join()
+
         with open(self.cache_thumbnail_file, 'w') as f:
             f.write(json.dumps(self.cache_thumbnail, indent=4))
         with open(self.cache_manga_file, 'w') as f:
             f.write(json.dumps(self.cache_manga, indent=4))
-        print("destuctor + ")
+        with open(self.cache_series_file, 'w') as f:
+            f.write(json.dumps(self.cache_series, indent=4))
     
     def clear_manga_cache(self):
         for e in self.cache_manga:
@@ -76,12 +99,59 @@ class KavitaAPI():
                 
         self.cache_thumbnail = []
         self.cache_manga = []
+        self.cache_series = []
+        
+    def cache_serie_threaded(self):
+        print("cache_serie_threaded +")
+        while self.running:
+            if len(self.caching_series_queue) == 0:
+                time.sleep(0.1)
+                continue
+            cached_serie = self.caching_series_queue[0]
+            del self.caching_series_queue[0]
+            print(f"Start caching serie {cached_serie} ")
+            serie = {
+                "serie_id": cached_serie,
+                "volumes": []
+            }
+            self.cache_series.append(serie)
+            volumes = self.get_volumes(cached_serie)
+            # {'id': 1483, 'chapter_id': 2399, 'title': 'Volume 40\n(0/147)', 'read': 0, 'pages': 147}
+            for v in volumes:
+                cid = v["chapter_id"]
+                pages = v["pages"]
+                for p in range(1, pages + 1):
+                    self.get_picture(cid, p)
+                self.cache_series[-1]["volumes"].append(v["id"])
+                # Update UI
+                if self.caching_callback:
+                    self.caching_callback()
+            
+            print(f"Finised caching serie {serie} ")
+
+        print("cache_serie_threaded -")
+
+    def cache_serie(self, serie, callback):
+        with self.lock:
+            self.caching_series_queue.append(serie)
+            self.caching_callback = callback
         
     def search_in_cover_cache(self, key, value):
         for e in self.cache_thumbnail:
             if key in e.keys() and e[key] == value:
                 return e["file"]
         return ""
+    
+    def search_in_serie_cache(self, sid, vid):
+        for e in self.cache_series:
+            if e["serie_id"] == sid:
+                if not vid:
+                    return True
+                else:
+                    for v in e["volumes"]:
+                        if v == vid:
+                            return True
+        return False
     
     def store_in_cover_cache(self, key, value, filename):
         self.cache_thumbnail.append({
@@ -90,7 +160,7 @@ class KavitaAPI():
         })
         
     def search_in_manga_cache(self, key1, value1, key2, value2):
-        for e in self.cache_thumbnail:
+        for e in self.cache_manga:
             if key1 in e.keys() and \
                key2 in e.keys() and \
                e[key1] == value1 and \
