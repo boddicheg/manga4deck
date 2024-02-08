@@ -15,8 +15,8 @@ Steam Deck mappings:
 Buttons:
 - (A) - Keyboard -> Enter 
 - (B) - Keyboard -> Backspace 
-- (Y) - Keyboard -> little 'y' - bind for cleaning cache, works only on start page 
-- (X) - Keyboard -> little 'c' - bind for caching manga serie, works only on manga volumes page 
+- (Y) - Keyboard -> 'Y' - bind for cleaning cache, works only on start page 
+- (X) - Keyboard -> 'C' - bind for caching manga serie, works only on manga volumes page 
 Cross:
 - (<) - Keboard -> Left Arrow 
 - (>) - Keboard -> Rigth Arrow 

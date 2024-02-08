@@ -93,8 +93,8 @@ class App(customtkinter.CTk):
         self.bind("<Down>", self.scroll_down)
         self.bind("<Up>", self.scroll_up)
         self.bind("<Return>", self.enter_to)
-        self.bind("<y>", self.clean_cache)
-        self.bind("<c>", self.cache_serie)
+        self.bind("<Y>", self.clean_cache)
+        self.bind("<C>", self.cache_serie)
         
         self.focused = 0
         
