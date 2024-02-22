@@ -15,10 +15,17 @@ Steam Deck mappings:
 Buttons:
 - (A) - Keyboard -> Enter 
 - (B) - Keyboard -> Backspace 
-- (Y) - Keyboard -> 'F1' - bind for cleaning cache, works only on start page 
 - (X) - Keyboard -> 'F2' - bind for caching manga serie, works only on manga volumes page 
 Cross:
 - (<) - Keboard -> Left Arrow 
 - (>) - Keboard -> Rigth Arrow 
 - (^) - Keboard -> Up Arrow 
 - (v) - Keboard -> Down Arrow 
+
+
+Deps
+----
+```
+sudo apt-get install python3-pil python3-pil.imagetk
+sudo apt-get install python3-tk
+```

@@ -10,10 +10,12 @@ import atexit
 CACHE_FOLDER = "./cache"
 
 class KavitaAPI():
-    def __init__(self, url, username, password, api_key):
-        self.url = url
+    def __init__(self, ip, username, password, api_key):
+        self.ip = ip
+        self.url = f"http://{ip}/api/"
         self.api_key = api_key
-        
+        self.lock = threading.Lock()
+
         if not os.path.exists(CACHE_FOLDER):
             os.mkdir(CACHE_FOLDER)
         
@@ -69,15 +71,20 @@ class KavitaAPI():
         else:
             raise("[!] Authentification failed!")
         # --
-        self.lock = threading.Lock()
+        
         self.caching_series_queue = []
         self.caching_callback = None
         self.running = True
         self.caching_thread = threading.Thread(target=self.cache_serie_threaded)
         self.caching_thread.start()
+    
+    def get_kavita_ip(self):
+        return self.ip
+    
+    def get_cached_count(self):
+        return len(self.cache_series)
         
     def destuctor(self):
-        print("kavita destructor +")
         with self.lock:
             self.running = False
 
@@ -87,7 +94,6 @@ class KavitaAPI():
             f.write(json.dumps(self.cache_manga, indent=4))
         with open(self.cache_series_file, 'w') as f:
             f.write(json.dumps(self.cache_series, indent=4))
-        print("kavita destructor -")
     
     def clear_manga_cache(self):
         for e in self.cache_manga:
