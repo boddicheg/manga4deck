@@ -14,6 +14,7 @@ class KavitaAPI():
         self.ip = ip
         self.url = f"http://{ip}/api/"
         self.api_key = api_key
+        self.offline_mode = False
         self.lock = threading.Lock()
 
         if not os.path.exists(CACHE_FOLDER):
@@ -21,156 +22,183 @@ class KavitaAPI():
         
         atexit.register(self.destuctor)
 
-        self.cache_thumbnail = []
-        self.cache_thumbnail_file = CACHE_FOLDER + "/cache_thumbnail.json"
-        
-        if not os.path.exists(self.cache_thumbnail_file):
-            with open(self.cache_thumbnail_file, 'w') as f:
-                f.write(json.dumps(self.cache_thumbnail, indent=4))
-        else:
-            with open(self.cache_thumbnail_file, 'r') as f:
-                self.cache_thumbnail = json.load(f)
-                
-        self.cache_manga = []
-        self.cache_manga_file = CACHE_FOLDER + "/cache_manga.json"
-        
-        if not os.path.exists(self.cache_manga_file):
-            with open(self.cache_thumbnail_file, 'w') as f:
-                f.write(json.dumps(self.cache_manga, indent=4))
-        else:
-            with open(self.cache_manga_file, 'r') as f:
-                self.cache_manga = json.load(f)
-                
-        self.cache_series = []
-        self.cache_series_file = CACHE_FOLDER + "/cache_series.json"
-        
-        if not os.path.exists(self.cache_series_file):
-            with open(self.cache_thumbnail_file, 'w') as f:
-                f.write(json.dumps(self.cache_series, indent=4))
-        else:
-            with open(self.cache_series_file, 'r') as f:
-                self.cache_series = json.load(f)
+        self.cache = {}
+        self.kv_cache_fields = {
+            # Menu structure
+            "library": CACHE_FOLDER + "/cache_library.json",
+            "series": CACHE_FOLDER + "/cache_series.json",
+            "volumes": CACHE_FOLDER + "/cache_volumes.json",
+            # Manga previews in menu
+            "serie_covers": CACHE_FOLDER + "/cache_serie_covers.json",
+            "volume_covers": CACHE_FOLDER + "/cache_volume_covers.json",
+            # Manga images
+            "manga": CACHE_FOLDER + "/cache_manga.json",
+            # Offline progress manga
+            "progress": CACHE_FOLDER + "/cache_progress.json",
+        }
 
-        response = requests.post(
-            self.url + "Account/login", 
-            json={
-                "username": username,
-                "password": password,
-                "apiKey": api_key
-            }
-        )
-        
-        if len(response.content.decode()) == 0:
-            raise("[!] Authentification failed!")
-        
-        auth_data = json.loads(response.content)
-        if "token" in auth_data:
-            self.token = auth_data["token"]
-            self.logged_as = auth_data["username"]
-            print(f"Logged as {self.logged_as}")
-        else:
-            raise("[!] Authentification failed!")
+        for k in self.kv_cache_fields.keys():
+            self.cache[k] = []
+            filename = self.kv_cache_fields[k]
+
+            if not os.path.exists(filename):
+                with open(filename, 'w') as f:
+                    f.write(json.dumps(self.cache[k], indent=4))
+            else:
+                with open(filename, 'r') as f:
+                    self.cache[k] = json.load(f)
+
+        try:
+            response = requests.post(
+                self.url + "Account/login", 
+                json={
+                    "username": username,
+                    "password": password,
+                    "apiKey": api_key
+                }
+            )
+            
+            if len(response.content.decode()) == 0:
+                raise("[!] Authentification failed!")
+            
+            auth_data = json.loads(response.content)
+            if "token" in auth_data:
+                self.token = auth_data["token"]
+                self.logged_as = auth_data["username"]
+                print(f"Logged as {self.logged_as}")
+            else:
+                raise("[!] Authentification failed!")
+        except:
+            self.offline_mode = True
+            self.token = ""
+            self.logged_as = ""
+            print("Now in offline mode")
         # --
-        
         self.caching_series_queue = []
         self.caching_callback = None
         self.running = True
         self.caching_thread = threading.Thread(target=self.cache_serie_threaded)
         self.caching_thread.start()
+
+        # Upload progress 
+        self.upload_progress()
+
+    def destuctor(self):
+        with self.lock:
+            self.running = False
+
+        for k in self.kv_cache_fields.keys():
+            filename = self.kv_cache_fields[k]
+            with open(filename, 'w') as f:
+                f.write(json.dumps(self.cache[k], indent=4))
     
     def get_kavita_ip(self):
         return self.ip
     
     def get_cached_count(self):
-        return len(self.cache_series)
-        
-    def destuctor(self):
-        with self.lock:
-            self.running = False
-
-        with open(self.cache_thumbnail_file, 'w') as f:
-            f.write(json.dumps(self.cache_thumbnail, indent=4))
-        with open(self.cache_manga_file, 'w') as f:
-            f.write(json.dumps(self.cache_manga, indent=4))
-        with open(self.cache_series_file, 'w') as f:
-            f.write(json.dumps(self.cache_series, indent=4))
+        return len(self.cache["series"])
     
-    def clear_manga_cache(self):
-        for e in self.cache_manga:
-            if os.path.isfile(e["file"]):
-                os.remove(e["file"])
+    def get_offline_mode(self):
+        return self.offline_mode
 
-        for e in self.cache_thumbnail:
-            if os.path.isfile(e["file"]):
-                os.remove(e["file"])
-                
-        self.cache_thumbnail = []
-        self.cache_manga = []
-        self.cache_series = []
+    def clear_manga_cache(self):
+        files = os.listdir(CACHE_FOLDER)
+        for file in files:
+            file_path = os.path.join(CACHE_FOLDER, file)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
         
+        for k in self.kv_cache_fields.keys():
+            self.cache[k] = []
+
+    #--------------------------------------------------------------------------
+    # Caching whole serie
+    #--------------------------------------------------------------------------
     def cache_serie_threaded(self):
-        print("cache_serie_threaded +")
         while self.running:
             if len(self.caching_series_queue) == 0:
                 time.sleep(0.1)
                 continue
             cached_serie = self.caching_series_queue[0]
             del self.caching_series_queue[0]
-            print(f"Start caching serie {cached_serie} ")
+            print(f"Start caching serie {cached_serie['id']} ")
+
             serie = {
-                "serie_id": cached_serie,
-                "volumes": []
+                "id": cached_serie["id"],
+                "title": cached_serie["title"],
+                "read": 0,
+                "pages": 0
             }
-            self.cache_series.append(serie)
-            volumes = self.get_volumes(cached_serie)
-            # {'id': 1483, 'chapter_id': 2399, 'title': 'Volume 40\n(0/147)', 'read': 0, 'pages': 147}
+
+            volumes = self.get_volumes(cached_serie["id"])
             for v in volumes:
-                cid = v["chapter_id"]
                 pages = v["pages"]
+                cid = v["chapter_id"]
                 for p in range(1, pages + 1):
                     with self.lock:
                         if not self.running:
                             return
                     self.get_picture(cid, p)
-                self.cache_series[-1]["volumes"].append(v["id"])
+                volume_already_cached = False
+                for vv in self.cache["volumes"]:
+                    if vv["chapter_id"] == cid:
+                        volume_already_cached = True
+                        vv["read"] = v["read"]
+                if not volume_already_cached:
+                    self.cache["volumes"].append({
+                        "id": v['id'],
+                        "chapter_id": v["chapter_id"],
+                        "title": v["title"],
+                        "read": v['read'],
+                        "pages": v['pages']
+                    })
+                serie["read"] += v['read']
+                serie["pages"] += v['pages']
                 # Update UI
                 if self.caching_callback:
                     self.caching_callback()
-            
-            print(f"Finised caching serie {serie} ")
+            # Cache serie
+            serie_already_cached = False
+            for s in self.cache["series"]:
+                if s["id"] == cached_serie['id']:
+                    serie_already_cached = True
+                    s["read"] = serie["read"]
+            if not serie_already_cached:
+                self.cache["series"].append(serie)
 
-        print("cache_serie_threaded -")
+            print(f"Finised caching serie")
 
     def cache_serie(self, serie, callback):
         with self.lock:
             self.caching_series_queue.append(serie)
             self.caching_callback = callback
-        
-    def search_in_cover_cache(self, key, value):
-        for e in self.cache_thumbnail:
+    
+    #--------------------------------------------------------------------------
+    # Search / store covers
+
+    def search_in_cover_cache(self, cache_name, key, value):
+        for e in self.cache[cache_name]:
             if key in e.keys() and e[key] == value:
                 return e["file"]
         return ""
-    
-    def search_in_serie_cache(self, sid, vid):
-        for e in self.cache_series:
-            if e["serie_id"] == sid:
-                if not vid:
-                    return True
-                else:
-                    for v in e["volumes"]:
-                        if v == vid:
-                            return True
+
+    #--------------------------------------------------------------------------
+    # Search / store manga images
+
+    def is_serie_cached(self, id):
+        for e in self.cache["series"]:
+            if e["id"] == id:
+                return True
         return False
     
-    def store_in_cover_cache(self, key, value, filename):
-        self.cache_thumbnail.append({
-            key: value,
-            "file": filename
-        })
-        
+    def is_volume_cached(self, id):
+        for e in self.cache["volumes"]:
+            if e["id"] == id:
+                return True
+        return False
+
     def search_in_manga_cache(self, key1, value1, key2, value2):
-        for e in self.cache_manga:
+        for e in self.cache["manga"]:
             if key1 in e.keys() and \
                key2 in e.keys() and \
                e[key1] == value1 and \
@@ -179,67 +207,78 @@ class KavitaAPI():
         return ""
     
     def store_in_manga_cache(self, key1, value1, key2, value2, filename):
-        self.cache_manga.append({
+        self.cache["manga"].append({
             key1: value1,
             key2: value2,
             "file": filename
         })
 
+    #--------------------------------------------------------------------------
     def get_library(self):
-        response = requests.get(
-            self.url + "library", 
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self.token}"
-            }
-        )
         result = []
-        library = json.loads(response.content)
-        for e in library:
-            result.append({
-                "id": e["id"],
-                "title": e["name"]
-            })
+        if not self.offline_mode:
+            response = requests.get(
+                self.url + "library", 
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {self.token}"
+                }
+            )
+        
+            library = json.loads(response.content)
+            for e in library:
+                result.append({
+                    "id": e["id"],
+                    "title": e["name"]
+                })
+            # caching for future needs
+            self.cache["library"] = result
+        else:
+            # load from cache:
+            result = self.cache["library"] 
+
         return result
     
     def get_series(self, parent):
-        response = requests.post(
-            self.url + f"series/v2",
-            json={
-                "statements": [
-                    {
-                    "comparison": 0,
-                    "field": 19,
-                    "value": f"{parent}"
-                    }
-                ],
-                "combination": 1,
-                "limitTo": 0
-            },
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self.token}"
-            }
-        )
         result = []
-        if len(response.content.decode()) > 0:
-            series = json.loads(response.content)
-            for e in series:
-                result.append({
-                    "id": e["id"],
-                    "title": e["name"],
-                    "read": int(e["pagesRead"]) * 100 / int(e["pages"])
-                })
+        if not self.offline_mode:
+            response = requests.post(
+                self.url + f"series/v2",
+                json={
+                    "statements": [
+                        {
+                        "comparison": 0,
+                        "field": 19,
+                        "value": f"{parent}"
+                        }
+                    ],
+                    "combination": 1,
+                    "limitTo": 0
+                },
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {self.token}"
+                }
+            )
+            if len(response.content.decode()) > 0:
+                series = json.loads(response.content)
+                for e in series:
+                    result.append({
+                        "id": e["id"],
+                        "title": e["name"],
+                        "read": int(e["pagesRead"]) * 100 / int(e["pages"])
+                    })
+        else:
+            result = self.cache["series"]
 
         return result
     
     def get_serie_cover(self, serie):
-        filename = self.search_in_cover_cache("seriesId", serie)
+        filename = self.search_in_cover_cache("serie_covers", "seriesId", serie)
         if len(filename) > 0:
             return filename
         
         url = self.url + f"image/series-cover?seriesId={serie}&apiKey={self.api_key}"
-        # print(f"url: {url}")
         response = requests.get(
             url,
             headers={
@@ -251,12 +290,45 @@ class KavitaAPI():
         
         with open(filename, 'wb') as f:
             f.write(response.content)
-            
-        self.store_in_cover_cache("seriesId", serie, filename)
+
+        # caching
+        self.cache["serie_covers"].append({
+            "seriesId": serie,
+            "file": filename
+        })
+
         return filename
     
+    def get_volumes(self, parent):
+        result = []
+        if not self.offline_mode:
+            response = requests.get(
+                self.url + f"series/series-detail?seriesId={parent}",
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {self.token}"
+                }
+            )
+
+            if len(response.content.decode()) > 0:
+                data = json.loads(response.content)
+                for vol in data["volumes"]:
+                    if len(vol["chapters"]) > 0:
+                        chapter_id = vol["chapters"][0]['id']
+                        result.append({
+                            "id": vol['id'],
+                            "chapter_id": chapter_id,
+                            "title": vol["name"],
+                            "read": vol['pagesRead'],
+                            "pages": vol['pages']
+                        })
+        else:
+            result = self.cache["volumes"]
+        
+        return result
+    
     def get_volume_cover(self, volume):
-        filename = self.search_in_cover_cache("volumeId", volume)
+        filename = self.search_in_cover_cache("volume_covers", "volumeId", volume)
         if len(filename) > 0:
             return filename
 
@@ -274,42 +346,22 @@ class KavitaAPI():
         with open(filename, 'wb') as f:
             f.write(response.content)
             
-        self.store_in_cover_cache("volumeId", volume, filename)
+        # caching
+        self.cache["volume_covers"].append({
+            "volumeId": volume,
+            "file": filename
+        })
+
         return filename
-        
-    def get_volumes(self, parent):
-        response = requests.get(
-            self.url + f"series/series-detail?seriesId={parent}",
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self.token}"
-            }
-        )
-        
-        result = []
-        if len(response.content.decode()) > 0:
-            data = json.loads(response.content)
-            # ic(data)
-            for vol in data["volumes"]:
-                if len(vol["chapters"]) > 0:
-                    chapter_id = vol["chapters"][0]['id']
-                    result.append({
-                        "id": vol['id'],
-                        "chapter_id": chapter_id,
-                        "title": vol["name"] + f"\n({vol['pagesRead']}/{vol['pages']})",
-                        "read": vol['pagesRead'],
-                        "pages": vol['pages']
-                    })
-        
-        return result
     
     def get_picture(self, id, page):
         # http://192.168.5.49:5001/api/reader/image?chapterId=1498&apiKey=8df0fde8-8229-464c-ae0c-fd58a1a35b11&page=3
         filename = self.search_in_manga_cache("chapterId", id, "page", page)
         if len(filename) > 0:
+            print("Found cached image " + filename)
             return filename
+
         url = self.url + f"reader/image?chapterId={id}&apiKey={self.api_key}&page={page}"
-        print(f"url: {url}")
         response = requests.get(
             url,
             headers={
@@ -325,7 +377,7 @@ class KavitaAPI():
     
     def save_progress(self, ids):
         url = self.url + f"reader/progress"
-        try:
+        if not self.offline_mode:
             requests.post(
                 url,
                 json = {
@@ -340,7 +392,39 @@ class KavitaAPI():
                     "Authorization": f"Bearer {self.token}"
                 }
             )
-        except:
-            pass
-        
+        else:
+            found = False
+            for record in self.cache["progress"]:
+                if record["libraryId"] == ids["libraryId"] and \
+                    record["seriesId"] == ids["seriesId"] and \
+                    record["volumeId"] == ids["volumeId"] and \
+                    record["chapterId"] == ids["chapterId"]:
+                    record["pageNum"] = ids["pageNum"]
+                    found = True
+            if not found:
+                self.cache["progress"].append({
+                        "libraryId": ids["libraryId"],
+                        "seriesId": ids["seriesId"],
+                        "volumeId": ids["volumeId"],
+                        "chapterId": ids["chapterId"],
+                        "pageNum": ids["pageNum"],
+                    })
+            # update in other cache arrays
+            for record in self.cache["volumes"]:
+                if record["id"] == ids["volumeId"] and \
+                    record["chapter_id"] == ids["chapterId"]:
+                    record["read"] = ids["pageNum"]
+                    break
+
+            for record in self.cache["series"]:
+                if record["id"] == ids["seriesId"]:
+                    record["read"] = ids["pageNum"]
+                    break
+
+    def upload_progress(self):
+        if not self.offline_mode:
+            for record in self.cache["progress"]:
+                self.save_progress(record)
+            self.cache["progress"] = []
+    
         

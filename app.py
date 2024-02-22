@@ -105,8 +105,10 @@ class App(customtkinter.CTk):
     def cache_serie(self, event):
         last_in_history = self.history[-1]
         if last_in_history["type"] == EntryType.VOLUME:
+            print(last_in_history)
             caching_serie = last_in_history["parent_id"]
-            self.kavita.cache_serie(caching_serie, self.update)
+            caching_title = last_in_history["title"]
+            self.kavita.cache_serie({ "id": caching_serie, "title": caching_title}, self.update)
 
     def scroll_down(self, event):
         self.main_frame._parent_canvas.yview_scroll(1, "units")
@@ -147,13 +149,6 @@ class App(customtkinter.CTk):
             "description": self.kavita.get_kavita_ip(),
             "fg_color": "black",
             "text_color": "white"
-        }, {
-            "id": -2,
-            "title": "Cached Manga",
-            "thumbnail": THUMB_PATH,
-            "description": f"{self.kavita.get_cached_count()} series",
-            "fg_color": "yellow",
-            "text_color": "black"
         }, {
             "id": -3,
             "title": "Clean Cache",
@@ -200,9 +195,11 @@ class App(customtkinter.CTk):
                     "fg_color": "black",
                     "text_color": "white"
                 }
-                if self.kavita.search_in_serie_cache(e["id"], None):
+
+                if self.kavita.is_serie_cached(e["id"]):
                     t["fg_color"] = "yellow"
                     t["text_color"] = "black"
+
                 if e["read"] == 100:
                     t["fg_color"] = "green"
                     t["text_color"] = "white"
@@ -214,14 +211,14 @@ class App(customtkinter.CTk):
                     "id": e["id"],
                     "title": e["title"],
                     "thumbnail": self.kavita.get_volume_cover(e["id"]),
-                    "description": "" ,
+                    "description":  f"({e['read']}/{e['pages']})" ,
                     "fg_color": "black",
                     "text_color": "white",
                     "chapter_id": e["chapter_id"],
                     "read": e["read"],
                     "pages": e["pages"]
                 }
-                if self.kavita.search_in_serie_cache(e["id"], None):
+                if self.kavita.is_volume_cached(e["id"]):
                     t["fg_color"] = "yellow"
                     t["text_color"] = "black"
                 if e["pages"] == e["read"]:
@@ -273,8 +270,6 @@ class App(customtkinter.CTk):
         metadata = event.widget.master.get_metadata()
         last_in_history = self.history[-1]["type"]
 
-        print(metadata)
-
         if last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.CLEAN_CACHE):
             self.kavita.clear_manga_cache()
             self.update()
@@ -283,7 +278,7 @@ class App(customtkinter.CTk):
         elif last_in_history == EntryType.LIBRARY:
             self.history.append({ "type": EntryType.SERIE, "parent_id": metadata["id"]})
         elif last_in_history == EntryType.SERIE:
-            self.history.append({ "type": EntryType.VOLUME, "parent_id": metadata["id"]})
+            self.history.append({ "type": EntryType.VOLUME, "parent_id": metadata["id"], "title": metadata["title"]})
         elif last_in_history == EntryType.VOLUME:
             self.history.append({ 
                                  "type": EntryType.PICTURE, 
