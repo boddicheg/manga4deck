@@ -358,7 +358,9 @@ class App(customtkinter.CTk):
         else:
             if self.focused != 0:
                 self.focused -= 1
-            self.main_frame.winfo_children()[self.focused].focus()
+            count = len(self.main_frame.winfo_children())
+            if count > 0:
+                self.main_frame.winfo_children()[self.focused].focus()
     
     def next_page(self, event):
         last_in_history = self.history[-1]["type"]
