@@ -10,8 +10,10 @@ customtkinter.set_appearance_mode("Dark")  # Modes: "System" (standard), "Dark",
 customtkinter.set_default_color_theme("dark-blue")  # Themes: "blue" (standard), "green", "dark-blue"
 
 class EntryType(IntEnum):
-    CLEAN_CACHE = -3
-    SHELF_CACHED = -2
+    EXIT = -5
+    ENABLE_OFFLINE_MODE = -4
+    UPDATE_SERVER_LIB = -3
+    CLEAN_CACHE = -2
     SHELF = 1
     LIBRARY = 2
     SERIE = 3
@@ -47,6 +49,7 @@ def cache_size(delimiter = 1024 * 1024 * 1024):
         stats = os.stat(path)
         size += stats.st_size
     return size / delimiter
+
 class CTkLabelEx(customtkinter.CTkLabel):
     def __init__(self, master, width, height, text, text_color, image = None, fg_color="black", compound="center"):
         customtkinter.CTkLabel.__init__(self, master=master, 
@@ -68,6 +71,8 @@ class CTkLabelEx(customtkinter.CTkLabel):
 class App(customtkinter.CTk):
     def __init__(self):
         super().__init__()
+        
+        self.app_running = True
 
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -92,10 +97,12 @@ class App(customtkinter.CTk):
         self.bind("<F2>", self.cache_serie)
         
         self.focused = 0
+        
         # Call destructor on window closing
         self.protocol("WM_DELETE_WINDOW", self.destructor)
 
     def destructor(self):
+        self.app_running = False
         self.kavita.running = False
         self.destroy()
 
@@ -146,14 +153,28 @@ class App(customtkinter.CTk):
             "id": -1,
             "title": "Kavita",
             "thumbnail": THUMB_PATH,
-            "description": self.kavita.get_kavita_ip(),
+            "description": self.kavita.get_kavita_ip() if not self.kavita.get_offline_mode() else "Offline",
+            "fg_color": "black" if not self.kavita.get_offline_mode() else "yellow",
+            "text_color": "white" if not self.kavita.get_offline_mode() else "black"
+        }, {
+            "id": -2,
+            "title": "Clean Cache",
+            "thumbnail": SETTINGS_PATH,
+            "description": f"Size: {cache_size():.1f}Gb" if not self.kavita.get_offline_mode() else "[Disabled]",
             "fg_color": "black",
             "text_color": "white"
         }, {
-            "id": -3,
-            "title": "Clean Cache",
+            "id": -4,
+            "title": "Offline Mode",
             "thumbnail": SETTINGS_PATH,
-            "description": f"Size: {cache_size():.1f}Gb",
+            "description": "Only cached available",
+            "fg_color": "black" if not self.kavita.get_offline_mode() else "yellow",
+            "text_color": "white" if not self.kavita.get_offline_mode() else "black"
+        }, {
+            "id": -5,
+            "title": "Exit",
+            "thumbnail": SETTINGS_PATH,
+            "description": "Close app",
             "fg_color": "black",
             "text_color": "white"
         }]
@@ -164,6 +185,9 @@ class App(customtkinter.CTk):
             self.draw_tile(entry, row, col)
 
     def draw(self):
+        if not self.app_running:
+            return
+
         tiles = []
         state = self.history[-1]["type"]
         parent = self.history[-1]["parent_id"]
@@ -253,8 +277,11 @@ class App(customtkinter.CTk):
         label.grid(row=row, column=col, padx=padx, pady=0)
 
     def clean_master(self):
-        for child in self.main_frame.winfo_children():
-            child.destroy()
+        try:
+            for child in self.main_frame.winfo_children():
+                child.destroy()
+        except:
+            pass
         
     def back_in_history(self, event):
         if len(self.history) > 1:
@@ -271,8 +298,18 @@ class App(customtkinter.CTk):
         last_in_history = self.history[-1]["type"]
 
         if last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.CLEAN_CACHE):
+            if self.kavita.get_offline_mode():
+                return
             self.kavita.clear_manga_cache()
             self.update()
+        elif last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.UPDATE_SERVER_LIB):
+            if self.kavita.get_offline_mode():
+                return
+        elif last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.ENABLE_OFFLINE_MODE):
+            self.kavita.offline_mode = not self.kavita.offline_mode
+            self.update()
+        elif last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.EXIT):
+            self.destructor()
         elif last_in_history == EntryType.SHELF:
             self.history.append({ "type": EntryType.LIBRARY, "parent_id": -1})
         elif last_in_history == EntryType.LIBRARY:
