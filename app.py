@@ -73,6 +73,7 @@ class App(customtkinter.CTk):
         super().__init__()
         
         self.app_running = True
+        self.focused = 0
 
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -95,8 +96,6 @@ class App(customtkinter.CTk):
         self.bind("<Up>", self.scroll_up)
         self.bind("<Return>", self.enter_to)
         self.bind("<F2>", self.cache_serie)
-        
-        self.focused = 0
         
         # Call destructor on window closing
         self.protocol("WM_DELETE_WINDOW", self.destructor)
@@ -183,7 +182,9 @@ class App(customtkinter.CTk):
             col = int(i % 8)
             row = int(i / 8)
             self.draw_tile(entry, row, col)
-
+        
+        self.after(100, lambda: self.main_frame.winfo_children()[0].focus())
+        
     def draw(self):
         if not self.app_running:
             return
@@ -195,7 +196,6 @@ class App(customtkinter.CTk):
         # Start page
         if state == EntryType.SHELF:
             self.draw_shelf()
-            return
 
         if state == EntryType.LIBRARY:
             entries = self.kavita.get_library()
@@ -259,6 +259,8 @@ class App(customtkinter.CTk):
                 col = int(i % 8)
                 row = int(i / 8)
                 self.draw_tile(entry, row, col)
+            # Set Focus
+            self.previous_page(None)
                 
     def draw_pic(self, filepath, left = False, first_small = False):
         image = Image.open(filepath)
@@ -294,6 +296,7 @@ class App(customtkinter.CTk):
 
     def OnSingleClick(self, event):
         self.focused = 0
+
         metadata = event.widget.master.get_metadata()
         last_in_history = self.history[-1]["type"]
 
@@ -327,6 +330,7 @@ class App(customtkinter.CTk):
         self.clean_master()
         self.draw()
         
+
     def OnFocusIn(self, event):
         event.widget.master.configure(text_color="red")
 
@@ -349,10 +353,10 @@ class App(customtkinter.CTk):
                 filepath = self.kavita.get_picture(chapter_id, self.history[-1]["read"])
                 self.draw_pic(filepath, False, False)
         else:
-            if self.focused - 1 >= 0:
+            if self.focused != 0:
                 self.focused -= 1
-                self.main_frame.winfo_children()[self.focused].focus()
-                
+            self.main_frame.winfo_children()[self.focused].focus()
+    
     def next_page(self, event):
         last_in_history = self.history[-1]["type"]
         if last_in_history == EntryType.PICTURE:
@@ -385,9 +389,9 @@ class App(customtkinter.CTk):
                 self.kavita.save_progress(progress)
         else:
             count = len(self.main_frame.winfo_children())
-            if self.focused < count:
-                self.main_frame.winfo_children()[self.focused].focus()
+            if self.focused + 1 < count:
                 self.focused += 1
+            self.main_frame.winfo_children()[self.focused].focus()
 
     def enter_to(self, event):
         self.main_frame.focus_get().event_generate("<Button-1>")
