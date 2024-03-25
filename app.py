@@ -21,8 +21,11 @@ class EntryType(IntEnum):
     PICTURE = 5
 
 IP = "192.168.5.49:5001"
-THUMB_PATH = "./assets/thumbnail.png"
-SETTINGS_PATH = "./assets/settings.png"
+THUMB_IMAGE_PATH = "./assets/thumbnail.png"
+SETTINGS_IMAGE_PATH = "./assets/settings.png"
+EXIT_IMAGE_PATH = "./assets/exit.jpg"
+OFFLINE_IMAGE_PATH = "./assets/offline.jpg"
+CACHE_IMAGE_PATH = "./assets/cache.jpg"
 CACHE_PATH = "./cache"
 
 username = "boddicheg"
@@ -151,28 +154,28 @@ class App(customtkinter.CTk):
         sections = [{
             "id": -1,
             "title": "Kavita",
-            "thumbnail": THUMB_PATH,
+            "thumbnail": THUMB_IMAGE_PATH,
             "description": self.kavita.get_kavita_ip() if not self.kavita.get_offline_mode() else "Offline",
             "fg_color": "black" if not self.kavita.get_offline_mode() else "yellow",
             "text_color": "white" if not self.kavita.get_offline_mode() else "black"
         }, {
             "id": -2,
             "title": "Clean Cache",
-            "thumbnail": SETTINGS_PATH,
+            "thumbnail": CACHE_IMAGE_PATH,
             "description": f"Size: {cache_size():.1f}Gb" if not self.kavita.get_offline_mode() else "[Disabled]",
             "fg_color": "black",
             "text_color": "white"
         }, {
             "id": -4,
             "title": "Offline Mode",
-            "thumbnail": SETTINGS_PATH,
+            "thumbnail": OFFLINE_IMAGE_PATH,
             "description": "Only cached available",
             "fg_color": "black" if not self.kavita.get_offline_mode() else "yellow",
             "text_color": "white" if not self.kavita.get_offline_mode() else "black"
         }, {
             "id": -5,
             "title": "Exit",
-            "thumbnail": SETTINGS_PATH,
+            "thumbnail": EXIT_IMAGE_PATH,
             "description": "Close app",
             "fg_color": "black",
             "text_color": "white"
@@ -203,7 +206,7 @@ class App(customtkinter.CTk):
                 tiles.append({
                     "id": 2,
                     "title": e["title"],
-                    "thumbnail": THUMB_PATH,
+                    "thumbnail": THUMB_IMAGE_PATH,
                     "description": "",
                     "fg_color": "black",
                     "text_color": "white"
