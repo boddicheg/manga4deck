@@ -10,8 +10,10 @@ customtkinter.set_appearance_mode("Dark")  # Modes: "System" (standard), "Dark",
 customtkinter.set_default_color_theme("dark-blue")  # Themes: "blue" (standard), "green", "dark-blue"
 
 class EntryType(IntEnum):
-    CLEAN_CACHE = -3
-    SHELF_CACHED = -2
+    EXIT = -5
+    ENABLE_OFFLINE_MODE = -4
+    UPDATE_SERVER_LIB = -3
+    CLEAN_CACHE = -2
     SHELF = 1
     LIBRARY = 2
     SERIE = 3
@@ -19,8 +21,11 @@ class EntryType(IntEnum):
     PICTURE = 5
 
 IP = "192.168.5.73:5001"
-THUMB_PATH = "./assets/thumbnail.png"
-SETTINGS_PATH = "./assets/settings.png"
+THUMB_IMAGE_PATH = "./assets/thumbnail.png"
+SETTINGS_IMAGE_PATH = "./assets/settings.png"
+EXIT_IMAGE_PATH = "./assets/exit.jpg"
+OFFLINE_IMAGE_PATH = "./assets/offline.jpg"
+CACHE_IMAGE_PATH = "./assets/cache.jpg"
 CACHE_PATH = "./cache"
 
 username = "boddicheg"
@@ -47,6 +52,7 @@ def cache_size(delimiter = 1024 * 1024 * 1024):
         stats = os.stat(path)
         size += stats.st_size
     return size / delimiter
+
 class CTkLabelEx(customtkinter.CTkLabel):
     def __init__(self, master, width, height, text, text_color, image = None, fg_color="black", compound="center"):
         customtkinter.CTkLabel.__init__(self, master=master, 
@@ -68,6 +74,9 @@ class CTkLabelEx(customtkinter.CTkLabel):
 class App(customtkinter.CTk):
     def __init__(self):
         super().__init__()
+        
+        self.app_running = True
+        self.focused = 0
 
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -91,11 +100,11 @@ class App(customtkinter.CTk):
         self.bind("<Return>", self.enter_to)
         self.bind("<F2>", self.cache_serie)
         
-        self.focused = 0
         # Call destructor on window closing
         self.protocol("WM_DELETE_WINDOW", self.destructor)
 
     def destructor(self):
+        self.app_running = False
         self.kavita.running = False
         self.destroy()
 
@@ -145,15 +154,29 @@ class App(customtkinter.CTk):
         sections = [{
             "id": -1,
             "title": "Kavita",
-            "thumbnail": THUMB_PATH,
-            "description": self.kavita.get_kavita_ip(),
+            "thumbnail": THUMB_IMAGE_PATH,
+            "description": self.kavita.get_kavita_ip() if not self.kavita.get_offline_mode() else "Offline",
+            "fg_color": "black" if not self.kavita.get_offline_mode() else "yellow",
+            "text_color": "white" if not self.kavita.get_offline_mode() else "black"
+        }, {
+            "id": -2,
+            "title": "Clean Cache",
+            "thumbnail": CACHE_IMAGE_PATH,
+            "description": f"Size: {cache_size():.1f}Gb" if not self.kavita.get_offline_mode() else "[Disabled]",
             "fg_color": "black",
             "text_color": "white"
         }, {
-            "id": -3,
-            "title": "Clean Cache",
-            "thumbnail": SETTINGS_PATH,
-            "description": f"Size: {cache_size():.1f}Gb",
+            "id": -4,
+            "title": "Offline Mode",
+            "thumbnail": OFFLINE_IMAGE_PATH,
+            "description": "Only cached available",
+            "fg_color": "black" if not self.kavita.get_offline_mode() else "yellow",
+            "text_color": "white" if not self.kavita.get_offline_mode() else "black"
+        }, {
+            "id": -5,
+            "title": "Exit",
+            "thumbnail": EXIT_IMAGE_PATH,
+            "description": "Close app",
             "fg_color": "black",
             "text_color": "white"
         }]
@@ -162,8 +185,13 @@ class App(customtkinter.CTk):
             col = int(i % 8)
             row = int(i / 8)
             self.draw_tile(entry, row, col)
-
+        
+        self.after(100, lambda: self.main_frame.winfo_children()[0].focus())
+        
     def draw(self):
+        if not self.app_running:
+            return
+
         tiles = []
         state = self.history[-1]["type"]
         parent = self.history[-1]["parent_id"]
@@ -171,7 +199,6 @@ class App(customtkinter.CTk):
         # Start page
         if state == EntryType.SHELF:
             self.draw_shelf()
-            return
 
         if state == EntryType.LIBRARY:
             entries = self.kavita.get_library()
@@ -179,7 +206,7 @@ class App(customtkinter.CTk):
                 tiles.append({
                     "id": 2,
                     "title": e["title"],
-                    "thumbnail": THUMB_PATH,
+                    "thumbnail": THUMB_IMAGE_PATH,
                     "description": "",
                     "fg_color": "black",
                     "text_color": "white"
@@ -235,6 +262,8 @@ class App(customtkinter.CTk):
                 col = int(i % 8)
                 row = int(i / 8)
                 self.draw_tile(entry, row, col)
+            # Set Focus
+            self.previous_page(None)
                 
     def draw_pic(self, filepath, left = False, first_small = False):
         image = Image.open(filepath)
@@ -253,8 +282,11 @@ class App(customtkinter.CTk):
         label.grid(row=row, column=col, padx=padx, pady=0)
 
     def clean_master(self):
-        for child in self.main_frame.winfo_children():
-            child.destroy()
+        try:
+            for child in self.main_frame.winfo_children():
+                child.destroy()
+        except:
+            pass
         
     def back_in_history(self, event):
         if len(self.history) > 1:
@@ -267,12 +299,23 @@ class App(customtkinter.CTk):
 
     def OnSingleClick(self, event):
         self.focused = 0
+
         metadata = event.widget.master.get_metadata()
         last_in_history = self.history[-1]["type"]
 
         if last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.CLEAN_CACHE):
+            if self.kavita.get_offline_mode():
+                return
             self.kavita.clear_manga_cache()
             self.update()
+        elif last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.UPDATE_SERVER_LIB):
+            if self.kavita.get_offline_mode():
+                return
+        elif last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.ENABLE_OFFLINE_MODE):
+            self.kavita.offline_mode = not self.kavita.offline_mode
+            self.update()
+        elif last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.EXIT):
+            self.destructor()
         elif last_in_history == EntryType.SHELF:
             self.history.append({ "type": EntryType.LIBRARY, "parent_id": -1})
         elif last_in_history == EntryType.LIBRARY:
@@ -290,6 +333,7 @@ class App(customtkinter.CTk):
         self.clean_master()
         self.draw()
         
+
     def OnFocusIn(self, event):
         event.widget.master.configure(text_color="red")
 
@@ -312,10 +356,12 @@ class App(customtkinter.CTk):
                 filepath = self.kavita.get_picture(chapter_id, self.history[-1]["read"])
                 self.draw_pic(filepath, False, False)
         else:
-            if self.focused - 1 >= 0:
+            if self.focused != 0:
                 self.focused -= 1
+            count = len(self.main_frame.winfo_children())
+            if count > 0:
                 self.main_frame.winfo_children()[self.focused].focus()
-                
+    
     def next_page(self, event):
         last_in_history = self.history[-1]["type"]
         if last_in_history == EntryType.PICTURE:
@@ -348,9 +394,9 @@ class App(customtkinter.CTk):
                 self.kavita.save_progress(progress)
         else:
             count = len(self.main_frame.winfo_children())
-            if self.focused < count:
-                self.main_frame.winfo_children()[self.focused].focus()
+            if self.focused + 1 < count:
                 self.focused += 1
+            self.main_frame.winfo_children()[self.focused].focus()
 
     def enter_to(self, event):
         self.main_frame.focus_get().event_generate("<Button-1>")
