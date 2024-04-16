@@ -18,7 +18,7 @@ class EntryType(IntEnum):
     VOLUME = 4
     PICTURE = 5
 
-IP = "192.168.5.49:5001"
+IP = "192.168.5.73:5001"
 THUMB_PATH = "./assets/thumbnail.png"
 SETTINGS_PATH = "./assets/settings.png"
 CACHE_PATH = "./cache"
