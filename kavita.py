@@ -444,5 +444,10 @@ class KavitaAPI():
                     "Authorization": f"Bearer {self.token}"
                 }
             )
-    
+        else:
+            for record in self.cache["volumes"]:
+                if record["serie_id"] == serie and \
+                    record["id"] == volume:
+                    record["read"] = record["pages"]
+                    break
         
