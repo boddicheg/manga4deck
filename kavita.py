@@ -218,7 +218,7 @@ class KavitaAPI():
         result = []
         if not self.offline_mode:
             response = requests.get(
-                self.url + "library", 
+                self.url + "library/libraries", 
                 headers={
                     "Accept": "application/json",
                     "Authorization": f"Bearer {self.token}"
