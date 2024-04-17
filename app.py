@@ -98,6 +98,7 @@ class App(customtkinter.CTk):
         self.bind("<Down>", self.scroll_down)
         self.bind("<Up>", self.scroll_up)
         self.bind("<Return>", self.enter_to)
+        self.bind("<F1>", self.set_volume_as_read)
         self.bind("<F2>", self.cache_serie)
         
         # Call destructor on window closing
@@ -400,6 +401,16 @@ class App(customtkinter.CTk):
 
     def enter_to(self, event):
         self.main_frame.focus_get().event_generate("<Button-1>")
+        
+    def set_volume_as_read(self, event):
+        metadata = event.widget.master.get_metadata()
+        last_in_history = self.history[-1]
+        
+        if last_in_history["type"] == EntryType.VOLUME:
+            seriesId = last_in_history["parent_id"]
+            volume = metadata["id"]
+            self.kavita.set_volume_as_read(seriesId, volume)
+            self.update()
 
 if __name__ == "__main__":
     app = App()

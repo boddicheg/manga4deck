@@ -426,5 +426,20 @@ class KavitaAPI():
             for record in self.cache["progress"]:
                 self.save_progress(record)
             self.cache["progress"] = []
+            
+    def set_volume_as_read(self, serie, volume):
+        url = self.url + f"reader/mark-volume-read"
+        if not self.offline_mode:
+            requests.post(
+                url,
+                json = {
+                    "seriesId": serie,
+                    "volumeId": volume
+                } ,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {self.token}"
+                }
+            )
     
         
