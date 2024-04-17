@@ -147,6 +147,7 @@ class KavitaAPI():
                 if not volume_already_cached:
                     self.cache["volumes"].append({
                         "id": v['id'],
+                        "serie_id": cached_serie["id"],
                         "chapter_id": v["chapter_id"],
                         "title": v["title"],
                         "read": v['read'],
@@ -323,7 +324,10 @@ class KavitaAPI():
                             "pages": vol['pages']
                         })
         else:
-            result = self.cache["volumes"]
+            volumes = self.cache["volumes"]
+            for v in volumes:
+                if parent == v['serie_id']:
+                    result.append(v)
         
         return result
     
@@ -358,7 +362,6 @@ class KavitaAPI():
         # http://192.168.5.49:5001/api/reader/image?chapterId=1498&apiKey=8df0fde8-8229-464c-ae0c-fd58a1a35b11&page=3
         filename = self.search_in_manga_cache("chapterId", id, "page", page)
         if len(filename) > 0:
-            print("Found cached image " + filename)
             return filename
 
         url = self.url + f"reader/image?chapterId={id}&apiKey={self.api_key}&page={page}"
