@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk ,Toplevel, Label
 import tkinter.messagebox
 import customtkinter
 from PIL import Image, ImageTk
@@ -41,6 +41,9 @@ PIC_HEIGHT = 800
 BIG_PIC_WIDTH = 960
 BIG_PIC_HEIGHT = 800
 
+TOAST_W = 300
+TOAST_H = 30
+
 # default is in gbytes
 def cache_size(delimiter = 1024 * 1024 * 1024):
     files = os.listdir(CACHE_PATH)
@@ -77,6 +80,7 @@ class App(customtkinter.CTk):
         
         self.app_running = True
         self.focused = 0
+        self.toasts = []
 
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -109,15 +113,37 @@ class App(customtkinter.CTk):
         self.kavita.running = False
         self.destroy()
 
-    def update(self):
+    def toast(self, message, alive = 5000, id_from_bottom = 1):
+        win = Toplevel(self)
+        win.wm_overrideredirect(True)
+        win.attributes('-topmost', 'true')
+        Label(win, text=message).pack()
+        
+        w = 20 + len(message) * 7
+        
+        x = self.winfo_rootx() + WIDTH - w - 25
+        y = self.winfo_rooty() + HEIGHT - TOAST_H - (TOAST_H) * id_from_bottom 
+        win.geometry("%dx%d+%d+%d" % (w, TOAST_H, x, y))
+        self.after(alive, win.destroy)
+        return win
+        
+    def draw_toast(self, message):
+        self.toasts = list(filter(lambda x: (x.winfo_exists()), self.toasts))
+        pos = len(self.toasts)
+        t = self.toast(message, 5000, pos)
+        self.toasts.append(t)
+
+    def update(self, message=None):
         self.after(100, self.draw)
+        if message:
+            self.draw_toast(f"{message} has been cached")
         
     def cache_serie(self, event):
         last_in_history = self.history[-1]
         if last_in_history["type"] == EntryType.VOLUME:
-            print(last_in_history)
             caching_serie = last_in_history["parent_id"]
             caching_title = last_in_history["title"]
+            self.draw_toast(f"Start caching {caching_title}")
             self.kavita.cache_serie({ "id": caching_serie, "title": caching_title}, self.update)
 
     def scroll_down(self, event):
@@ -309,12 +335,17 @@ class App(customtkinter.CTk):
                 return
             self.kavita.clear_manga_cache()
             self.update()
+            self.draw_toast("Cache cleaned!")
         elif last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.UPDATE_SERVER_LIB):
             if self.kavita.get_offline_mode():
                 return
         elif last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.ENABLE_OFFLINE_MODE):
             self.kavita.offline_mode = not self.kavita.offline_mode
             self.update()
+            if self.kavita.offline_mode:
+                self.draw_toast("Offline mode enabled")
+            else:
+                self.draw_toast("Offline mode disabled")
         elif last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.EXIT):
             self.destructor()
         elif last_in_history == EntryType.SHELF:
@@ -411,6 +442,7 @@ class App(customtkinter.CTk):
             volume = metadata["id"]
             self.kavita.set_volume_as_read(seriesId, volume)
             self.update()
+            self.draw_toast(f"Volume {volume} marked as read")
 
 if __name__ == "__main__":
     app = App()

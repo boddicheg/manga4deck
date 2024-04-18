@@ -157,7 +157,7 @@ class KavitaAPI():
                 serie["pages"] += v['pages']
                 # Update UI
                 if self.caching_callback:
-                    self.caching_callback()
+                    self.caching_callback(v["title"])
             # Cache serie
             serie_already_cached = False
             for s in self.cache["series"]:
