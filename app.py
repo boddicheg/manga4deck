@@ -35,11 +35,8 @@ api_key = "8df0fde8-8229-464c-ae0c-fd58a1a35b11"
 WIDTH = 1280
 HEIGHT = 800
 
-PIC_WIDTH = 496
+PIC_WIDTH = 960
 PIC_HEIGHT = 800
-
-BIG_PIC_WIDTH = 960
-BIG_PIC_HEIGHT = 800
 
 TOAST_W = 300
 TOAST_H = 30
@@ -310,12 +307,13 @@ class App(customtkinter.CTk):
         image = Image.open(filepath)
         row = 0
         col = 0
-        padx = (170, 0)
-        factor = BIG_PIC_WIDTH / image.width
+        padx = (0, 0)
+        offset = 20
+        factor = (WIDTH - offset) / image.width
         w = int(image.width * factor)
         h = int(image.height * factor)
         self.reset_scroll()
-            
+
         img = ImageTk.PhotoImage(image.resize((w, h)))
         label = CTkLabelEx(self.main_frame, text="", text_color='white', fg_color="black", width=w, height=h)
         label.configure(image=img)
@@ -406,7 +404,7 @@ class App(customtkinter.CTk):
             if current_page > 0:
                 self.history[-1]["read"] -= 1
                 filepath = self.kavita.get_picture(chapter_id, self.history[-1]["read"])
-                self.draw_pic(filepath, False, False)
+                self.draw_pic(filepath)
         else:
             if self.focused != 0:
                 self.focused -= 1
@@ -422,7 +420,7 @@ class App(customtkinter.CTk):
                 print(f"Current position: {chapter_id}, page {current_page + 1}")
                 self.history[-1]["read"] += 1
                 filepath = self.kavita.get_picture(chapter_id, self.history[-1]["read"])
-                self.draw_pic(filepath, False, False)
+                self.draw_pic(filepath)
                 # Save Progress
                 progress = {
                     "libraryId": 0,
