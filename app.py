@@ -74,6 +74,15 @@ class CTkLabelEx(customtkinter.CTkLabel):
     def get_metadata(self):
         return self.metadata
 
+    def set_text_color(self, color):
+        self.configure(text_color=color)
+
+    def set_fg_color(self, color):
+        self.configure(fg_color=color)
+    
+    def set_text(self, text):
+        self.configure(text=text)
+
 class App(customtkinter.CTk):
     def __init__(self):
         super().__init__()
@@ -134,7 +143,9 @@ class App(customtkinter.CTk):
         self.toasts.append(t)
 
     def update(self, message=None):
+        self.clean_master()
         self.after(100, self.draw)
+        self.after(100, self.set_focus_on)
         if message:
             self.draw_toast(f"{message} has been cached")
         
@@ -214,7 +225,10 @@ class App(customtkinter.CTk):
             self.draw_tile(entry, row, col)
         
         self.after(100, lambda: self.main_frame.winfo_children()[0].focus())
-        
+
+    def reset_scroll(self):
+        self.main_frame._parent_canvas.yview_scroll(-100, "units")
+
     def draw(self):
         if not self.app_running:
             return
@@ -290,9 +304,9 @@ class App(customtkinter.CTk):
                 row = int(i / 8)
                 self.draw_tile(entry, row, col)
             # Set Focus
-            self.previous_page(None)
+            self.set_focus_on()
                 
-    def draw_pic(self, filepath, left = False, first_small = False):
+    def draw_pic(self, filepath):
         image = Image.open(filepath)
         row = 0
         col = 0
@@ -300,7 +314,7 @@ class App(customtkinter.CTk):
         factor = BIG_PIC_WIDTH / image.width
         w = int(image.width * factor)
         h = int(image.height * factor)
-        self.main_frame._parent_canvas.yview_scroll(-100, "units")
+        self.reset_scroll()
             
         img = ImageTk.PhotoImage(image.resize((w, h)))
         label = CTkLabelEx(self.main_frame, text="", text_color='white', fg_color="black", width=w, height=h)
@@ -376,6 +390,12 @@ class App(customtkinter.CTk):
         image = Image.open(filepath)
         return (image.width / image.height) < 1.0
 
+    def set_focus_on(self):
+        count = len(self.main_frame.winfo_children())
+        if count > 0 and self.focused < count:
+            print(self.main_frame.winfo_children()[self.focused])
+            self.main_frame.winfo_children()[self.focused].focus()
+
     def previous_page(self, event):
         last_in_history = self.history[-1]["type"]
         
@@ -390,9 +410,7 @@ class App(customtkinter.CTk):
         else:
             if self.focused != 0:
                 self.focused -= 1
-            count = len(self.main_frame.winfo_children())
-            if count > 0:
-                self.main_frame.winfo_children()[self.focused].focus()
+            self.set_focus_on()
     
     def next_page(self, event):
         last_in_history = self.history[-1]["type"]
