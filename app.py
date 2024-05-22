@@ -85,6 +85,7 @@ class App(customtkinter.CTk):
         super().__init__()
         
         self.app_running = True
+        self.focused_selection_history = []
         self.focused = 0
         self.toasts = []
 
@@ -335,6 +336,9 @@ class App(customtkinter.CTk):
             self.main_frame = customtkinter.CTkScrollableFrame(self, width=WIDTH, height=HEIGHT)
             self.main_frame.grid(row=0, column=0, padx=0, pady=0)
             self.draw()
+        if len(self.focused_selection_history) > 0:
+            self.focused = self.focused_selection_history.pop()
+            self.main_frame.winfo_children()[self.focused].focus()
 
     def OnSingleClick(self, event):
         self.focused = 0
@@ -447,6 +451,8 @@ class App(customtkinter.CTk):
             self.main_frame.winfo_children()[self.focused].focus()
 
     def enter_to(self, event):
+        print(self.focused)
+        self.focused_selection_history.append(self.focused)
         self.main_frame.focus_get().event_generate("<Button-1>")
         
     def set_volume_as_read(self, event):
