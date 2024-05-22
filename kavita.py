@@ -450,4 +450,19 @@ class KavitaAPI():
                     record["id"] == volume:
                     record["read"] = record["pages"]
                     break
+
+    def update_server_library(self):
+        url = self.url + f"library/scan-all"
+        if not self.offline_mode:
+            response = requests.post(
+                url,
+                json = {
+                    "force": True
+                } ,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {self.token}"
+                }
+            )
+            print(response.content, response.status_code)
         

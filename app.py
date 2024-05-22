@@ -202,6 +202,13 @@ class App(customtkinter.CTk):
             "fg_color": "black",
             "text_color": "white"
         }, {
+            "id": -3,
+            "title": "Update lib",
+            "thumbnail": CACHE_IMAGE_PATH,
+            "description": "Server Kavita",
+            "fg_color": "black",
+            "text_color": "white"
+        }, {
             "id": -4,
             "title": "Offline Mode",
             "thumbnail": OFFLINE_IMAGE_PATH,
@@ -355,6 +362,8 @@ class App(customtkinter.CTk):
         elif last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.UPDATE_SERVER_LIB):
             if self.kavita.get_offline_mode():
                 return
+            self.kavita.update_server_library()
+            self.draw_toast("Kavita library update requested!")
         elif last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.ENABLE_OFFLINE_MODE):
             self.kavita.offline_mode = not self.kavita.offline_mode
             self.update()
@@ -395,7 +404,6 @@ class App(customtkinter.CTk):
     def set_focus_on(self):
         count = len(self.main_frame.winfo_children())
         if count > 0 and self.focused < count:
-            print(self.main_frame.winfo_children()[self.focused])
             self.main_frame.winfo_children()[self.focused].focus()
 
     def previous_page(self, event):
@@ -451,7 +459,6 @@ class App(customtkinter.CTk):
             self.main_frame.winfo_children()[self.focused].focus()
 
     def enter_to(self, event):
-        print(self.focused)
         self.focused_selection_history.append(self.focused)
         self.main_frame.focus_get().event_generate("<Button-1>")
         
