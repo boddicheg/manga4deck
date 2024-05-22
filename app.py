@@ -159,7 +159,8 @@ class App(customtkinter.CTk):
         self.main_frame._parent_canvas.yview_scroll(1, "units")
         
     def scroll_up(self, event):
-        self.main_frame._parent_canvas.yview_scroll(-1, "units")
+        if self.main_frame._parent_canvas.yview() != (0.0, 1.0):
+            self.main_frame._parent_canvas.yview_scroll(-1, "units")
 
     def format_tile_desc(self, label, desc):
         title = label[0:14] + "..." if len(label) > 13 else label
@@ -332,6 +333,11 @@ class App(customtkinter.CTk):
         try:
             for child in self.main_frame.winfo_children():
                 child.destroy()
+
+            self.main_frame.destroy()
+            self.main_frame = None
+            self.main_frame = customtkinter.CTkScrollableFrame(self, width=WIDTH, height=HEIGHT)
+            self.main_frame.grid(row=0, column=0, padx=0, pady=0)
         except:
             pass
         
@@ -339,9 +345,6 @@ class App(customtkinter.CTk):
         if len(self.history) > 1:
             self.history.pop()
             self.clean_master()
-            self.main_frame.destroy()
-            self.main_frame = customtkinter.CTkScrollableFrame(self, width=WIDTH, height=HEIGHT)
-            self.main_frame.grid(row=0, column=0, padx=0, pady=0)
             self.draw()
         if len(self.focused_selection_history) > 0:
             self.focused = self.focused_selection_history.pop()
@@ -352,25 +355,24 @@ class App(customtkinter.CTk):
 
         metadata = event.widget.master.get_metadata()
         last_in_history = self.history[-1]["type"]
+        toast_msg = ""
 
         if last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.CLEAN_CACHE):
             if self.kavita.get_offline_mode():
                 return
             self.kavita.clear_manga_cache()
-            self.update()
-            self.draw_toast("Cache cleaned!")
+            toast_msg = "Cache cleaned!"
         elif last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.UPDATE_SERVER_LIB):
             if self.kavita.get_offline_mode():
                 return
             self.kavita.update_server_library()
-            self.draw_toast("Kavita library update requested!")
+            toast_msg = "Kavita library update requested!"
         elif last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.ENABLE_OFFLINE_MODE):
             self.kavita.offline_mode = not self.kavita.offline_mode
-            self.update()
             if self.kavita.offline_mode:
-                self.draw_toast("Offline mode enabled")
+                toast_msg = "Offline mode enabled"
             else:
-                self.draw_toast("Offline mode disabled")
+                toast_msg = "Offline mode disabled"
         elif last_in_history == EntryType.SHELF and metadata["id"] == int(EntryType.EXIT):
             self.destructor()
         elif last_in_history == EntryType.SHELF:
@@ -387,8 +389,10 @@ class App(customtkinter.CTk):
                                  "read": metadata["read"], 
                                  "pages": metadata["pages"]
                                  })
-        self.clean_master()
-        self.draw()
+        self.update()
+        
+        if len(toast_msg):
+            self.draw_toast(toast_msg)
         
 
     def OnFocusIn(self, event):
