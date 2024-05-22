@@ -390,10 +390,10 @@ class App(customtkinter.CTk):
                                  "pages": metadata["pages"]
                                  })
         self.update()
-    
+
         idx = 10
         while idx > 0:
-            self.scroll_up()
+            self.scroll_up(None)
             idx -= 1
         
         if len(toast_msg):
