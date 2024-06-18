@@ -30,12 +30,12 @@ class KavitaAPI():
             # Menu structure
             # "library": CACHE_FOLDER + "/cache_library.json",
             # "series": CACHE_FOLDER + "/cache_series.json",
-            "volumes": CACHE_FOLDER + "/cache_volumes.json",
+            # "volumes": CACHE_FOLDER + "/cache_volumes.json",
             # Manga previews in menu
             # "serie_covers": CACHE_FOLDER + "/cache_serie_covers.json",
             # "volume_covers": CACHE_FOLDER + "/cache_volume_covers.json",
             # Manga images
-            "manga": CACHE_FOLDER + "/cache_manga.json",
+            # "manga": CACHE_FOLDER + "/cache_manga.json",
             # Offline progress manga
             "progress": CACHE_FOLDER + "/cache_progress.json",
         }
@@ -82,6 +82,7 @@ class KavitaAPI():
         self.running = True
         self.caching_thread = threading.Thread(target=self.cache_serie_threaded)
         self.caching_thread.start()
+        self.offline_mode = True
 
         # Upload progress 
         self.upload_progress()
@@ -110,15 +111,18 @@ class KavitaAPI():
             file_path = os.path.join(CACHE_FOLDER, file)
             if os.path.isfile(file_path):
                 os.remove(file_path)
-        
-        for k in self.kv_cache_fields.keys():
-            self.cache[k] = []
 
         self.database.clean()
 
     #--------------------------------------------------------------------------
     # Caching whole serie
     #--------------------------------------------------------------------------
+    def is_series_cached(self, id):
+        return self.database.is_series_cached(id)
+    
+    def is_volume_cached(self, id):
+        return self.database.is_volume_cached(id)
+    
     def cache_serie_threaded(self):
         while self.running:
             if len(self.caching_series_queue) == 0:
@@ -126,8 +130,8 @@ class KavitaAPI():
                 continue
             cached_serie = self.caching_series_queue[0]
             del self.caching_series_queue[0]
+            
             print(f"Start caching serie {cached_serie['id']} ")
-
             serie = {
                 "id": cached_serie["id"],
                 "title": cached_serie["title"],
@@ -136,24 +140,23 @@ class KavitaAPI():
             }
 
             volumes = self.get_volumes(cached_serie["id"])
+            print(volumes)
             for v in volumes:
+                volume_id = v["volume_id"]
                 pages = v["pages"]
                 cid = v["chapter_id"]
+                # Caching manga pictures
                 for p in range(1, pages + 1):
                     with self.lock:
                         if not self.running:
                             return
                     self.get_picture(cid, p)
-                volume_already_cached = False
-                for vv in self.cache["volumes"]:
-                    if vv["chapter_id"] == cid:
-                        volume_already_cached = True
-                        vv["read"] = v["read"]
-                if not volume_already_cached:
-                    self.cache["volumes"].append({
-                        "id": v['id'],
-                        "serie_id": cached_serie["id"],
-                        "chapter_id": v["chapter_id"],
+                # Caching volume
+                with self.lock:
+                    self.database.add_volumes({
+                        "volume_id": volume_id,
+                        "series_id": cached_serie["id"],
+                        "chapter_id": cid,
                         "title": v["title"],
                         "read": v['read'],
                         "pages": v['pages']
@@ -164,51 +167,14 @@ class KavitaAPI():
                 if self.caching_callback:
                     self.caching_callback(v["title"])
             # Cache serie
-            serie_already_cached = False
-            for s in self.cache["series"]:
-                if s["id"] == cached_serie['id']:
-                    serie_already_cached = True
-                    s["read"] = serie["read"]
-            if not serie_already_cached:
-                self.cache["series"].append(serie)
-
+            with self.lock:
+                self.database.add_series(serie)
             print(f"Finised caching serie")
 
     def cache_serie(self, serie, callback):
         with self.lock:
             self.caching_series_queue.append(serie)
             self.caching_callback = callback
-
-    #--------------------------------------------------------------------------
-    # Search / store manga images
-
-    def is_serie_cached(self, id):
-        for e in self.cache["series"]:
-            if e["id"] == id:
-                return True
-        return False
-    
-    def is_volume_cached(self, id):
-        for e in self.cache["volumes"]:
-            if e["id"] == id:
-                return True
-        return False
-
-    def search_in_manga_cache(self, key1, value1, key2, value2):
-        for e in self.cache["manga"]:
-            if key1 in e.keys() and \
-               key2 in e.keys() and \
-               e[key1] == value1 and \
-               e[key2] == value2:
-                return e["file"]
-        return ""
-    
-    def store_in_manga_cache(self, key1, value1, key2, value2, filename):
-        self.cache["manga"].append({
-            key1: value1,
-            key2: value2,
-            "file": filename
-        })
 
     #--------------------------------------------------------------------------
     def get_library(self):
@@ -246,9 +212,9 @@ class KavitaAPI():
                 json={
                     "statements": [
                         {
-                        "comparison": 0,
-                        "field": 19,
-                        "value": f"{parent}"
+                            "comparison": 0,
+                            "field": 19,
+                            "value": f"{parent}"
                         }
                     ],
                     "combination": 1,
@@ -262,18 +228,22 @@ class KavitaAPI():
             if len(response.content.decode()) > 0:
                 series = json.loads(response.content)
                 for e in series:
-                    result.append({
+                    row = {
                         "id": e["id"],
                         "title": e["name"],
-                        "read": int(e["pagesRead"]) * 100 / int(e["pages"])
-                    })
+                        "read": int(e["pagesRead"]) * 100 / int(e["pages"]),
+                        "pages": int(e["pages"])
+                    }
+                    result.append(row)
         else:
-            result = self.cache["series"]
+            result = self.database.get_series()
 
         return result
     
     def get_series_cover(self, series):
-        filename = self.database.search_series_cover(series)
+        filename = ""
+        with self.lock:
+            filename = self.database.search_series_cover(series)
         if len(filename) > 0:
             return filename
         
@@ -293,7 +263,6 @@ class KavitaAPI():
             "seriesId": series,
             "file": filename
         })
-        
         self.database.commit_changes()
 
         return filename
@@ -314,23 +283,24 @@ class KavitaAPI():
                 for vol in data["volumes"]:
                     if len(vol["chapters"]) > 0:
                         chapter_id = vol["chapters"][0]['id']
-                        result.append({
-                            "id": vol['id'],
+                        row = {
+                            "volume_id": vol['id'],
                             "chapter_id": chapter_id,
+                            "series_id": parent,
                             "title": vol["name"],
                             "read": vol['pagesRead'],
                             "pages": vol['pages']
-                        })
+                        }
+                        result.append(row)
         else:
-            volumes = self.cache["volumes"]
-            for v in volumes:
-                if parent == v['serie_id']:
-                    result.append(v)
+            result = self.database.get_volumes()
         
         return result
     
     def get_volume_cover(self, volume):
-        filename = self.database.search_volume_cover( volume)
+        filename = ""
+        with self.lock:
+            filename = self.database.search_volume_cover( volume)
         if len(filename) > 0:
             return filename
 
@@ -358,7 +328,9 @@ class KavitaAPI():
     
     def get_picture(self, id, page):
         # http://192.168.5.49:5001/api/reader/image?chapterId=1498&apiKey=8df0fde8-8229-464c-ae0c-fd58a1a35b11&page=3
-        filename = self.search_in_manga_cache("chapterId", id, "page", page)
+        filename = ""
+        with self.lock:
+            filename = self.database.search_manga_pics(id, page)
         if len(filename) > 0:
             return filename
 
@@ -373,7 +345,14 @@ class KavitaAPI():
         
         with open(filename, 'wb') as f:
             f.write(response.content)
-        self.store_in_manga_cache("chapterId", id, "page", page, filename)
+
+        with self.lock:
+            self.database.add_manga_pic({
+                "chapter_id": id, 
+                "page": page, 
+                "file": filename
+            })
+
         return filename
     
     def save_progress(self, ids):

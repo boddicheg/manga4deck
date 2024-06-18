@@ -270,7 +270,7 @@ class App(customtkinter.CTk):
                     "text_color": "white"
                 }
 
-                if self.kavita.is_serie_cached(e["id"]):
+                if self.kavita.is_series_cached(e["id"]):
                     t["fg_color"] = "yellow"
                     t["text_color"] = "black"
 
@@ -282,9 +282,9 @@ class App(customtkinter.CTk):
             entries = self.kavita.get_volumes(parent)
             for e in entries:
                 t = {
-                    "id": e["id"],
+                    "id": e["volume_id"],
                     "title": e["title"],
-                    "thumbnail": self.kavita.get_volume_cover(e["id"]),
+                    "thumbnail": self.kavita.get_volume_cover(e["volume_id"]),
                     "description":  f"({e['read']}/{e['pages']})" ,
                     "fg_color": "black",
                     "text_color": "white",
@@ -292,7 +292,7 @@ class App(customtkinter.CTk):
                     "read": e["read"],
                     "pages": e["pages"]
                 }
-                if self.kavita.is_volume_cached(e["id"]):
+                if self.kavita.is_volume_cached(e["volume_id"]):
                     t["fg_color"] = "yellow"
                     t["text_color"] = "black"
                 if e["pages"] == e["read"]:

@@ -23,6 +23,23 @@ class Series(Base):
     read = Column(Integer, nullable=False)
     pages = Column(Integer, nullable=False)
 
+class Volumes(Base):
+    __tablename__ = 'volumes'
+    id = Column(Integer, primary_key=True)
+    volume_id = Column(Integer, nullable=False)
+    series_id = Column(Integer, nullable=False)
+    chapter_id = Column(Integer, nullable=False)
+    title = Column(String, nullable=False)
+    read = Column(Integer, nullable=False)
+    pages = Column(Integer, nullable=False)
+    
+class MangaPictures(Base):
+    __tablename__ = 'manga_pictures'
+    id = Column(Integer, primary_key=True)
+    chapter_id = Column(Integer, nullable=False)
+    page = Column(Integer, nullable=False)
+    filepath = Column(String, nullable=False)
+
 class SerieCovers(Base):
     __tablename__ = 'serie_covers'
     id = Column(Integer, primary_key=True)
@@ -34,7 +51,8 @@ class VolumeCovers(Base):
     id = Column(Integer, primary_key=True)
     volume_id = Column(Integer, nullable=False)
     filepath = Column(String, nullable=False)
-    
+
+g_tables = [Library, Series, Volumes, MangaPictures, SerieCovers, VolumeCovers]
 # -----------------------------------------------------------------------------
 
 class DBSession:
@@ -48,6 +66,7 @@ class DBSession:
         
     def destuctor(self):
         self.session.close()
+
 # -----------------------------------------------------------------------------
 # Library methods
     def add_library(self, data):
@@ -69,10 +88,7 @@ class DBSession:
                 "title": library.title
             })
         return result
-    
-    def clean_libraries(self):
-        self.session.query(Library).delete()
-        self.commit_changes()
+
 # -----------------------------------------------------------------------------
 # Series methods
     def add_series(self, data):
@@ -86,13 +102,52 @@ class DBSession:
                                     title=data["title"],
                                     read=data["read"],
                                     pages=data["pages"]))
+            self.commit_changes()
 
     def get_series(self):
+        # TODO: add library id to save and search
         series = self.session.query(Series).all()
         result = []
         for item in series:
             result.append({
                 "id": item.series_id,
+                "title": item.title,
+                "read": item.read * 100 / item.pages,
+                "pages": item.pages
+            })
+
+        return result
+    
+    def is_series_cached(self, id):
+        count = self.session.query(Series).filter_by(series_id=id).count()
+        return count > 0
+
+# -----------------------------------------------------------------------------
+# Volumes methods
+    def add_volumes(self, data):
+        keys = ["series_id", "volume_id", "chapter_id", "title", "read", "pages"]
+        for k in keys:
+            if k not in data.keys():
+                print(f"-> Can't find key {k} in params")
+                
+        count = self.session.query(Volumes).filter_by(volume_id=data["volume_id"]).count()
+        if count == 0:
+            self.session.add(Volumes(series_id=data["series_id"],
+                                    volume_id=data["volume_id"],
+                                    chapter_id=data["chapter_id"],
+                                    title=data["title"],
+                                    read=data["read"],
+                                    pages=data["pages"]))
+            self.commit_changes()
+
+    def get_volumes(self):
+        series = self.session.query(Volumes).all()
+        result = []
+        for item in series:
+            result.append({
+                "volume_id": item.volume_id,
+                "series_id": item.series_id,
+                "chapter_id": item.chapter_id,
                 "title": item.title,
                 "read": item.read,
                 "pages": item.pages
@@ -100,9 +155,9 @@ class DBSession:
 
         return result
     
-    def clean_series(self):
-        self.session.query(Series).delete()
-        self.commit_changes()
+    def is_volume_cached(self, id):
+        count = self.session.query(Volumes).filter_by(volume_id=id).count()
+        return count > 0
 
 # -----------------------------------------------------------------------------
 # Serie covers methods
@@ -117,10 +172,6 @@ class DBSession:
     def search_series_cover(self, id):
         result = self.session.query(SerieCovers).filter_by(series_id=id).first()
         return result.filepath if result else ""
-    
-    def clean_serie_covers(self):
-        self.session.query(SerieCovers).delete()
-        self.commit_changes()
 
 # -----------------------------------------------------------------------------# 
 # Volume covers methods
@@ -134,24 +185,35 @@ class DBSession:
     def search_volume_cover(self, id):
         result = self.session.query(VolumeCovers).filter_by(volume_id=id).first()
         return result.filepath if result else ""
+
+# -----------------------------------------------------------------------------
+# Manga pictures methods
+    def add_manga_pic(self, data):
+        keys = ["chapter_id", "page", "file"]
+        for k in keys:
+            if k not in data.keys():
+                print(f"-> Can't find key {k} in params")
+        count = self.session.query(MangaPictures).filter_by(chapter_id=data["chapter_id"], page=data["page"]).count()
+        if count == 0:
+            self.session.add(MangaPictures(chapter_id=data["chapter_id"], page=data["page"], filepath=data["file"]))
+            self.commit_changes()
     
-    def clean_volume_covers(self):
-        self.session.query(VolumeCovers).delete()
-        self.commit_changes()
+    def search_manga_pics(self, id, page):
+        result = self.session.query(MangaPictures).filter_by(chapter_id=id, page=page).first()
+        return result.filepath if result else ""
 
 # -----------------------------------------------------------------------------
     def commit_changes(self):
         self.session.commit()
         
     def print(self):
-        classes = [Library, SerieCovers, VolumeCovers]
-        for c in classes:
+        for c in g_tables:
             rows = self.session.query(c).all()
             print(c.__tablename__)
             for row in rows:
                 print("-> ", row.__dict__)
                 
     def clean(self):
-        self.clean_libraries()
-        self.clean_serie_covers()
-        self.clean_volume_covers()
+        for t in g_tables:
+            self.session.query(t).delete()
+        self.commit_changes()
