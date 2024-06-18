@@ -7,12 +7,22 @@ import atexit
 # Create a base class for declarative class definitions
 Base = declarative_base()
 
+# -----------------------------------------------------------------------------
+# Tables
 class Library(Base):
     __tablename__ = 'library'
     id = Column(Integer, primary_key=True)
     library_id = Column(Integer, nullable=False)
     title = Column(String, nullable=False)
     
+class Series(Base):
+    __tablename__ = 'series'
+    id = Column(Integer, primary_key=True)
+    series_id = Column(Integer, nullable=False)
+    title = Column(String, nullable=False)
+    read = Column(Integer, nullable=False)
+    pages = Column(Integer, nullable=False)
+
 class SerieCovers(Base):
     __tablename__ = 'serie_covers'
     id = Column(Integer, primary_key=True)
@@ -24,6 +34,8 @@ class VolumeCovers(Base):
     id = Column(Integer, primary_key=True)
     volume_id = Column(Integer, nullable=False)
     filepath = Column(String, nullable=False)
+    
+# -----------------------------------------------------------------------------
 
 class DBSession:
     def __init__(self, db_path) -> None:
@@ -61,10 +73,40 @@ class DBSession:
     def clean_libraries(self):
         self.session.query(Library).delete()
         self.commit_changes()
+# -----------------------------------------------------------------------------
+# Series methods
+    def add_series(self, data):
+        keys = ["id", "title", "read", "pages"]
+        for k in keys:
+            if k not in data.keys():
+                print(f"-> Can't find key {k} in params")
+        count = self.session.query(Series).filter_by(series_id=data["id"]).count()
+        if count == 0:
+            self.session.add(Series(series_id=data["id"], 
+                                    title=data["title"],
+                                    read=data["read"],
+                                    pages=data["pages"]))
+
+    def get_series(self):
+        series = self.session.query(Series).all()
+        result = []
+        for item in series:
+            result.append({
+                "id": item.series_id,
+                "title": item.title,
+                "read": item.read,
+                "pages": item.pages
+            })
+
+        return result
+    
+    def clean_series(self):
+        self.session.query(Series).delete()
+        self.commit_changes()
 
 # -----------------------------------------------------------------------------
 # Serie covers methods
-    def add_serie_cover(self, data):
+    def add_series_cover(self, data):
         keys = ["seriesId", "file"]
         for k in keys:
             if k not in data.keys():
@@ -72,7 +114,7 @@ class DBSession:
 
         self.session.add(SerieCovers(series_id=data["seriesId"], filepath=data["file"]))
     
-    def search_serie_cover(self, id):
+    def search_series_cover(self, id):
         result = self.session.query(SerieCovers).filter_by(series_id=id).first()
         return result.filepath if result else ""
     

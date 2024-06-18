@@ -29,7 +29,7 @@ class KavitaAPI():
         self.kv_cache_fields = {
             # Menu structure
             # "library": CACHE_FOLDER + "/cache_library.json",
-            "series": CACHE_FOLDER + "/cache_series.json",
+            # "series": CACHE_FOLDER + "/cache_series.json",
             "volumes": CACHE_FOLDER + "/cache_volumes.json",
             # Manga previews in menu
             # "serie_covers": CACHE_FOLDER + "/cache_serie_covers.json",
@@ -272,12 +272,12 @@ class KavitaAPI():
 
         return result
     
-    def get_serie_cover(self, serie):
-        filename = self.database.search_serie_cover(serie)
+    def get_series_cover(self, series):
+        filename = self.database.search_series_cover(series)
         if len(filename) > 0:
             return filename
         
-        url = self.url + f"image/series-cover?seriesId={serie}&apiKey={self.api_key}"
+        url = self.url + f"image/series-cover?seriesId={series}&apiKey={self.api_key}"
         response = requests.get(
             url,
             headers={
@@ -289,8 +289,8 @@ class KavitaAPI():
         with open(filename, 'wb') as f:
             f.write(response.content)
         
-        self.database.add_serie_cover({
-            "seriesId": serie,
+        self.database.add_series_cover({
+            "seriesId": series,
             "file": filename
         })
         

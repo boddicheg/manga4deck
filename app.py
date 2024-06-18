@@ -264,7 +264,7 @@ class App(customtkinter.CTk):
                 t = {
                     "id": e["id"],
                     "title": e["title"],
-                    "thumbnail": self.kavita.get_serie_cover(e["id"]),
+                    "thumbnail": self.kavita.get_series_cover(e["id"]),
                     "description": f"Read: {e['read']:.1f}%" ,
                     "fg_color": "black",
                     "text_color": "white"
