@@ -52,7 +52,16 @@ class VolumeCovers(Base):
     volume_id = Column(Integer, nullable=False)
     filepath = Column(String, nullable=False)
 
-g_tables = [Library, Series, Volumes, MangaPictures, SerieCovers, VolumeCovers]
+class ReadProgress(Base):
+    __tablename__ = 'read_progress'
+    id = Column(Integer, primary_key=True)
+    library_id = Column(Integer, nullable=False)
+    series_id = Column(Integer, nullable=False)
+    volume_id = Column(Integer, nullable=False)
+    chapter_id = Column(Integer, nullable=False)
+    page = Column(Integer, nullable=False)
+    
+g_tables = [Library, Series, Volumes, MangaPictures, SerieCovers, VolumeCovers, ReadProgress]
 # -----------------------------------------------------------------------------
 
 class DBSession:
@@ -121,6 +130,12 @@ class DBSession:
     def is_series_cached(self, id):
         count = self.session.query(Series).filter_by(series_id=id).count()
         return count > 0
+    
+    def set_series_read_pages(self, series_id, page):
+        series = self.session.query(Series).filter_by(series_id=series_id).first()
+        if series:
+            series.read = page
+            self.commit_changes()
 
 # -----------------------------------------------------------------------------
 # Volumes methods
@@ -158,6 +173,12 @@ class DBSession:
     def is_volume_cached(self, id):
         count = self.session.query(Volumes).filter_by(volume_id=id).count()
         return count > 0
+    
+    def set_volume_as_read(self, id, series_id, page=None):
+        volume = self.session.query(Volumes).filter_by(volume_id=id, series_id=series_id).first()
+        if volume:
+            volume.read = page if page else volume.pages
+            self.commit_changes()
 
 # -----------------------------------------------------------------------------
 # Serie covers methods
@@ -203,6 +224,49 @@ class DBSession:
         return result.filepath if result else ""
 
 # -----------------------------------------------------------------------------
+# Read Progress methods
+    def add_progress(self, data):
+        keys = ["library_id", "series_id", "volume_id", "chapter_id", "page"]
+        for k in keys:
+            if k not in data.keys():
+                print(f"-> Can't find key {k} in params")
+                
+        count = self.session.query(ReadProgress).filter_by(
+            library_id=data["library_id"],
+            series_id=data["series_id"],
+            volume_id=data["volume_id"],
+            chapter_id=data["chapter_id"],
+            page=data["page"]
+        ).count()
+
+        if count == 0:
+            self.session.add(ReadProgress(library_id=data["library_id"],
+                                            series_id=data["series_id"],
+                                            volume_id=data["volume_id"],
+                                            chapter_id=data["chapter_id"],
+                                            page=data["page"]))
+            self.commit_changes()
+            
+    def get_progress(self):
+        # TODO: add library id to save and search
+        progress = self.session.query(ReadProgress).all()
+        result = []
+        for item in progress:
+            result.append({
+                "library_id": item.library_id,
+                "series_id": item.series_id,
+                "volume_id": item.volume_id,
+                "chapter_id": item.chapter_id,
+                "page": item.page,
+            })
+
+        return result
+    
+    def clean_progress(self):
+        self.session.query(ReadProgress).delete()
+        self.commit_changes()
+# -----------------------------------------------------------------------------
+
     def commit_changes(self):
         self.session.commit()
         

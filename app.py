@@ -444,21 +444,21 @@ class App(customtkinter.CTk):
                 self.draw_pic(filepath)
                 # Save Progress
                 progress = {
-                    "libraryId": 0,
-                    "seriesId": 0,
-                    "volumeId": 0,
-                    "chapterId": 0,
-                    "pageNum": 0,
+                    "library_id": 0,
+                    "series_id": 0,
+                    "volume_id": 0,
+                    "chapter_id": 0,
+                    "page": 0,
                 }
                 for e in self.history:
                     if e["type"] == EntryType.SERIE:
-                        progress["libraryId"] = e["parent_id"]
+                        progress["library_id"] = e["parent_id"]
                     if e["type"] == EntryType.VOLUME:
-                        progress["seriesId"] = e["parent_id"]
+                        progress["series_id"] = e["parent_id"]
                     if e["type"] == EntryType.PICTURE:
-                        progress["volumeId"] = e["parent_id"]
-                        progress["chapterId"] = e["chapter_id"]
-                        progress["pageNum"] = e["read"]
+                        progress["volume_id"] = e["parent_id"]
+                        progress["chapter_id"] = e["chapter_id"]
+                        progress["page"] = e["read"]
 
                 self.kavita.save_progress(progress)
         else:

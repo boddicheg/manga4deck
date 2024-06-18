@@ -25,32 +25,6 @@ class KavitaAPI():
         
         atexit.register(self.destuctor)
 
-        self.cache = {}
-        self.kv_cache_fields = {
-            # Menu structure
-            # "library": CACHE_FOLDER + "/cache_library.json",
-            # "series": CACHE_FOLDER + "/cache_series.json",
-            # "volumes": CACHE_FOLDER + "/cache_volumes.json",
-            # Manga previews in menu
-            # "serie_covers": CACHE_FOLDER + "/cache_serie_covers.json",
-            # "volume_covers": CACHE_FOLDER + "/cache_volume_covers.json",
-            # Manga images
-            # "manga": CACHE_FOLDER + "/cache_manga.json",
-            # Offline progress manga
-            "progress": CACHE_FOLDER + "/cache_progress.json",
-        }
-
-        for k in self.kv_cache_fields.keys():
-            self.cache[k] = []
-            filename = self.kv_cache_fields[k]
-
-            if not os.path.exists(filename):
-                with open(filename, 'w') as f:
-                    f.write(json.dumps(self.cache[k], indent=4))
-            else:
-                with open(filename, 'r') as f:
-                    self.cache[k] = json.load(f)
-
         try:
             response = requests.post(
                 self.url + "Account/login", 
@@ -82,7 +56,6 @@ class KavitaAPI():
         self.running = True
         self.caching_thread = threading.Thread(target=self.cache_serie_threaded)
         self.caching_thread.start()
-        self.offline_mode = True
 
         # Upload progress 
         self.upload_progress()
@@ -90,11 +63,6 @@ class KavitaAPI():
     def destuctor(self):
         with self.lock:
             self.running = False
-
-        for k in self.kv_cache_fields.keys():
-            filename = self.kv_cache_fields[k]
-            with open(filename, 'w') as f:
-                f.write(json.dumps(self.cache[k], indent=4))
     
     def get_kavita_ip(self):
         return self.ip
@@ -361,11 +329,11 @@ class KavitaAPI():
             requests.post(
                 url,
                 json = {
-                    "libraryId": ids["libraryId"],
-                    "seriesId": ids["seriesId"],
-                    "volumeId": ids["volumeId"],
-                    "chapterId": ids["chapterId"],
-                    "pageNum": ids["pageNum"],
+                    "libraryId": ids["library_id"],
+                    "seriesId": ids["series_id"],
+                    "volumeId": ids["volume_id"],
+                    "chapterId": ids["chapter_id"],
+                    "pageNum": ids["page"],
                 } ,
                 headers={
                     "Accept": "application/json",
@@ -373,48 +341,24 @@ class KavitaAPI():
                 }
             )
         else:
-            found = False
-            for record in self.cache["progress"]:
-                if record["libraryId"] == ids["libraryId"] and \
-                    record["seriesId"] == ids["seriesId"] and \
-                    record["volumeId"] == ids["volumeId"] and \
-                    record["chapterId"] == ids["chapterId"]:
-                    record["pageNum"] = ids["pageNum"]
-                    found = True
-            if not found:
-                self.cache["progress"].append({
-                        "libraryId": ids["libraryId"],
-                        "seriesId": ids["seriesId"],
-                        "volumeId": ids["volumeId"],
-                        "chapterId": ids["chapterId"],
-                        "pageNum": ids["pageNum"],
-                    })
-            # update in other cache arrays
-            for record in self.cache["volumes"]:
-                if record["id"] == ids["volumeId"] and \
-                    record["chapter_id"] == ids["chapterId"]:
-                    record["read"] = ids["pageNum"]
-                    break
-
-            for record in self.cache["series"]:
-                if record["id"] == ids["seriesId"]:
-                    record["read"] = ids["pageNum"]
-                    break
+            self.database.add_progress(ids)
+            self.database.set_volume_as_read(ids["volume_id"], ids["series_id"], ids["page"])
+            self.database.set_series_read_pages(ids["series_id"], ids["page"])
 
     def upload_progress(self):
         if not self.offline_mode:
-            for record in self.cache["progress"]:
+            for record in self.database.get_progress():
                 self.save_progress(record)
-            self.cache["progress"] = []
+            self.database.clean_progress()
             
-    def set_volume_as_read(self, serie, volume):
+    def set_volume_as_read(self, series_id, volume_id):
         url = self.url + f"reader/mark-volume-read"
         if not self.offline_mode:
             requests.post(
                 url,
                 json = {
-                    "seriesId": serie,
-                    "volumeId": volume
+                    "seriesId": series_id,
+                    "volumeId": volume_id
                 } ,
                 headers={
                     "Accept": "application/json",
@@ -422,16 +366,12 @@ class KavitaAPI():
                 }
             )
         else:
-            for record in self.cache["volumes"]:
-                if record["serie_id"] == serie and \
-                    record["id"] == volume:
-                    record["read"] = record["pages"]
-                    break
+            self.database.set_volume_as_read(volume_id, series_id)
 
     def update_server_library(self):
         url = self.url + f"library/scan-all"
         if not self.offline_mode:
-            response = requests.post(
+            requests.post(
                 url,
                 json = {
                     "force": True
@@ -441,5 +381,4 @@ class KavitaAPI():
                     "Authorization": f"Bearer {self.token}"
                 }
             )
-            print(response.content, response.status_code)
         
