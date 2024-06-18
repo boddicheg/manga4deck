@@ -1,13 +1,15 @@
 import requests
 import json
-from icecream import ic
 import time 
 import os
 import hashlib
 import threading
 import atexit
 
+from db import *
+
 CACHE_FOLDER = "./cache"
+DB_PATH = "cache.sqlite"
 
 class KavitaAPI():
     def __init__(self, ip, username, password, api_key):
@@ -16,6 +18,7 @@ class KavitaAPI():
         self.api_key = api_key
         self.offline_mode = False
         self.lock = threading.Lock()
+        self.database = DBSession(DB_PATH)
 
         if not os.path.exists(CACHE_FOLDER):
             os.mkdir(CACHE_FOLDER)
@@ -25,7 +28,7 @@ class KavitaAPI():
         self.cache = {}
         self.kv_cache_fields = {
             # Menu structure
-            "library": CACHE_FOLDER + "/cache_library.json",
+            # "library": CACHE_FOLDER + "/cache_library.json",
             "series": CACHE_FOLDER + "/cache_series.json",
             "volumes": CACHE_FOLDER + "/cache_volumes.json",
             # Manga previews in menu
@@ -228,15 +231,17 @@ class KavitaAPI():
         
             library = json.loads(response.content)
             for e in library:
-                result.append({
+                row = {
                     "id": e["id"],
                     "title": e["name"]
-                })
-            # caching for future needs
-            self.cache["library"] = result
+                }
+                result.append(row)
+                # caching for future needs
+                self.database.add_library(row)
+            self.database.commit_changes()
         else:
             # load from cache:
-            result = self.cache["library"] 
+            result = self.database.get_libraries()
 
         return result
     
