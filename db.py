@@ -43,8 +43,9 @@ class DBSession:
         for k in keys:
             if k not in data.keys():
                 print(f"-> Can't find key {k} in params")
-                
-        self.session.add(Library(library_id=data["id"], title=data["title"]))
+        count = self.session.query(Library).filter_by(library_id=data["id"]).count()
+        if count == 0:
+            self.session.add(Library(library_id=data["id"], title=data["title"]))
 
     def get_libraries(self):
         libraries = self.session.query(Library).all()
@@ -60,14 +61,55 @@ class DBSession:
     def clean_libraries(self):
         self.session.query(Library).delete()
         self.commit_changes()
+
+# -----------------------------------------------------------------------------
+# Serie covers methods
+    def add_serie_cover(self, data):
+        keys = ["seriesId", "file"]
+        for k in keys:
+            if k not in data.keys():
+                print(f"-> Can't find key {k} in params")
+
+        self.session.add(SerieCovers(series_id=data["seriesId"], filepath=data["file"]))
+    
+    def search_serie_cover(self, id):
+        result = self.session.query(SerieCovers).filter_by(series_id=id).first()
+        return result.filepath if result else ""
+    
+    def clean_serie_covers(self):
+        self.session.query(SerieCovers).delete()
+        self.commit_changes()
+
+# -----------------------------------------------------------------------------# 
+# Volume covers methods
+    def add_volume_cover(self, data):
+        keys = ["volumeId", "file"]
+        for k in keys:
+            if k not in data.keys():
+                print(f"-> Can't find key {k} in params")
+        self.session.add(VolumeCovers(volume_id=data["volumeId"], filepath=data["file"]))
+    
+    def search_volume_cover(self, id):
+        result = self.session.query(VolumeCovers).filter_by(volume_id=id).first()
+        return result.filepath if result else ""
+    
+    def clean_volume_covers(self):
+        self.session.query(VolumeCovers).delete()
+        self.commit_changes()
+
 # -----------------------------------------------------------------------------
     def commit_changes(self):
         self.session.commit()
         
     def print(self):
-        classes = [Library]
+        classes = [Library, SerieCovers, VolumeCovers]
         for c in classes:
             rows = self.session.query(c).all()
             print(c.__tablename__)
             for row in rows:
                 print("-> ", row.__dict__)
+                
+    def clean(self):
+        self.clean_libraries()
+        self.clean_serie_covers()
+        self.clean_volume_covers()

@@ -32,8 +32,8 @@ class KavitaAPI():
             "series": CACHE_FOLDER + "/cache_series.json",
             "volumes": CACHE_FOLDER + "/cache_volumes.json",
             # Manga previews in menu
-            "serie_covers": CACHE_FOLDER + "/cache_serie_covers.json",
-            "volume_covers": CACHE_FOLDER + "/cache_volume_covers.json",
+            # "serie_covers": CACHE_FOLDER + "/cache_serie_covers.json",
+            # "volume_covers": CACHE_FOLDER + "/cache_volume_covers.json",
             # Manga images
             "manga": CACHE_FOLDER + "/cache_manga.json",
             # Offline progress manga
@@ -114,6 +114,8 @@ class KavitaAPI():
         for k in self.kv_cache_fields.keys():
             self.cache[k] = []
 
+        self.database.clean()
+
     #--------------------------------------------------------------------------
     # Caching whole serie
     #--------------------------------------------------------------------------
@@ -176,15 +178,6 @@ class KavitaAPI():
         with self.lock:
             self.caching_series_queue.append(serie)
             self.caching_callback = callback
-    
-    #--------------------------------------------------------------------------
-    # Search / store covers
-
-    def search_in_cover_cache(self, cache_name, key, value):
-        for e in self.cache[cache_name]:
-            if key in e.keys() and e[key] == value:
-                return e["file"]
-        return ""
 
     #--------------------------------------------------------------------------
     # Search / store manga images
@@ -280,7 +273,7 @@ class KavitaAPI():
         return result
     
     def get_serie_cover(self, serie):
-        filename = self.search_in_cover_cache("serie_covers", "seriesId", serie)
+        filename = self.database.search_serie_cover(serie)
         if len(filename) > 0:
             return filename
         
@@ -293,15 +286,15 @@ class KavitaAPI():
         )
         
         filename = CACHE_FOLDER + "/" + hashlib.md5(str(time.time()).encode()).hexdigest() + ".png"
-        
         with open(filename, 'wb') as f:
             f.write(response.content)
-
-        # caching
-        self.cache["serie_covers"].append({
+        
+        self.database.add_serie_cover({
             "seriesId": serie,
             "file": filename
         })
+        
+        self.database.commit_changes()
 
         return filename
     
@@ -337,7 +330,7 @@ class KavitaAPI():
         return result
     
     def get_volume_cover(self, volume):
-        filename = self.search_in_cover_cache("volume_covers", "volumeId", volume)
+        filename = self.database.search_volume_cover( volume)
         if len(filename) > 0:
             return filename
 
@@ -351,15 +344,15 @@ class KavitaAPI():
         )
         
         filename = CACHE_FOLDER + "/" + hashlib.md5(str(time.time()).encode()).hexdigest() + ".png"
-        
         with open(filename, 'wb') as f:
             f.write(response.content)
             
         # caching
-        self.cache["volume_covers"].append({
+        self.database.add_volume_cover({
             "volumeId": volume,
             "file": filename
         })
+        self.database.commit_changes()
 
         return filename
     
