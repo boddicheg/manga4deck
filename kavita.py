@@ -108,7 +108,6 @@ class KavitaAPI():
             }
 
             volumes = self.get_volumes(cached_serie["id"])
-            print(volumes)
             for v in volumes:
                 volume_id = v["volume_id"]
                 pages = v["pages"]
@@ -261,7 +260,7 @@ class KavitaAPI():
                         }
                         result.append(row)
         else:
-            result = self.database.get_volumes()
+            result = self.database.get_volumes(parent)
         
         return result
     

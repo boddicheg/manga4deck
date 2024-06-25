@@ -155,8 +155,8 @@ class DBSession:
                                     pages=data["pages"]))
             self.commit_changes()
 
-    def get_volumes(self):
-        series = self.session.query(Volumes).all()
+    def get_volumes(self, series_id):
+        series = self.session.query(Volumes).filter_by(series_id=series_id).all()
         result = []
         for item in series:
             result.append({
