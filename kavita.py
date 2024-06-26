@@ -109,6 +109,13 @@ class KavitaAPI():
 
             volumes = self.get_volumes(cached_serie["id"])
             for v in volumes:
+                serie["read"] += v['read']
+                serie["pages"] += v['pages']
+            # Cache serie
+            with self.lock:
+                self.database.add_series(serie)
+
+            for v in volumes:
                 volume_id = v["volume_id"]
                 pages = v["pages"]
                 cid = v["chapter_id"]
@@ -128,14 +135,10 @@ class KavitaAPI():
                         "read": v['read'],
                         "pages": v['pages']
                     })
-                serie["read"] += v['read']
-                serie["pages"] += v['pages']
                 # Update UI
                 if self.caching_callback:
                     self.caching_callback(v["title"])
-            # Cache serie
-            with self.lock:
-                self.database.add_series(serie)
+
             print(f"Finised caching serie")
 
     def cache_serie(self, serie, callback):
