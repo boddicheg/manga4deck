@@ -118,6 +118,9 @@ class KavitaAPI():
             for v in volumes:
                 volume_id = v["volume_id"]
                 pages = v["pages"]
+                read = v['read']
+                if pages == read:
+                    continue
                 cid = v["chapter_id"]
                 # Caching manga pictures
                 for p in range(1, pages + 1):
