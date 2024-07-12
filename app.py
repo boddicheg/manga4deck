@@ -35,9 +35,6 @@ api_key = "8df0fde8-8229-464c-ae0c-fd58a1a35b11"
 WIDTH = 1280
 HEIGHT = 800
 
-PIC_WIDTH = 960
-PIC_HEIGHT = 800
-
 TOAST_W = 300
 TOAST_H = 30
 
@@ -319,8 +316,15 @@ class App(customtkinter.CTk):
         padx = (0, 0)
         offset = 20
         factor = (WIDTH - offset) / image.width
+
+        if factor > 1.3:
+            factor = 1.0
+            diff = int((WIDTH - image.width * factor) / 2.0)
+            padx = (diff, 0)
+            
         w = int(image.width * factor)
         h = int(image.height * factor)
+
         self.reset_scroll()
 
         img = ImageTk.PhotoImage(image.resize((w, h)))
