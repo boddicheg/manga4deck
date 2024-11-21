@@ -12,3 +12,6 @@ build/app/warn-app.txt
 build/app/xref-app.html
 build/app/localpycs/*
 dist/app.exe
+app/src-tauri/backend/build/*
+app/src-tauri/backend/lib/__pycache__/*
+app/src-tauri/backend/cache.sqlite
