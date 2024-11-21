@@ -3,3 +3,5 @@ customtkinter
 pillow
 requests
 sqlalchemy
+flask
+flask-cors

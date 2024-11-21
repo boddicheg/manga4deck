@@ -2,14 +2,19 @@ import requests
 import json
 import time 
 import os
+import sys
 import hashlib
 import threading
 import atexit
 
-from db import *
+from lib.db import *
 
-CACHE_FOLDER = "./cache"
-DB_PATH = "cache.sqlite"
+def get_executable_path(relative_path):
+    base_path = os.path.dirname(sys.executable)
+    return os.path.join(base_path, relative_path)
+
+DB_PATH = get_executable_path("cache.sqlite")
+CACHE_FOLDER = get_executable_path("cache")
 
 class KavitaAPI():
     def __init__(self, ip, username, password, api_key):
@@ -220,23 +225,24 @@ class KavitaAPI():
         if len(filename) > 0:
             return filename
         
-        url = self.url + f"image/series-cover?seriesId={series}&apiKey={self.api_key}"
-        response = requests.get(
-            url,
-            headers={
-                "Content-Type": "image/png",
-            }
-        )
-        
-        filename = CACHE_FOLDER + "/" + hashlib.md5(str(time.time()).encode()).hexdigest() + ".png"
-        with open(filename, 'wb') as f:
-            f.write(response.content)
-        
-        self.database.add_series_cover({
-            "seriesId": series,
-            "file": filename
-        })
-        self.database.commit_changes()
+        if not self.offline_mode:
+            url = self.url + f"image/series-cover?seriesId={series}&apiKey={self.api_key}"
+            response = requests.get(
+                url,
+                headers={
+                    "Content-Type": "image/png",
+                }
+            )
+            
+            filename = CACHE_FOLDER + "/" + hashlib.md5(str(time.time()).encode()).hexdigest() + ".png"
+            with open(filename, 'wb') as f:
+                f.write(response.content)
+            
+            self.database.add_series_cover({
+                "seriesId": series,
+                "file": filename
+            })
+            self.database.commit_changes()
 
         return filename
     
@@ -277,25 +283,26 @@ class KavitaAPI():
         if len(filename) > 0:
             return filename
 
-        url = self.url + f"image/volume-cover?volumeId={volume}&apiKey={self.api_key}"
-        print(f"url: {url}")
-        response = requests.get(
-            url,
-            headers={
-                "Content-Type": "image/png",
-            }
-        )
-        
-        filename = CACHE_FOLDER + "/" + hashlib.md5(str(time.time()).encode()).hexdigest() + ".png"
-        with open(filename, 'wb') as f:
-            f.write(response.content)
+        if not self.offline_mode:
+            url = self.url + f"image/volume-cover?volumeId={volume}&apiKey={self.api_key}"
+            # print(f"url: {url}")
+            response = requests.get(
+                url,
+                headers={
+                    "Content-Type": "image/png",
+                }
+            )
             
-        # caching
-        self.database.add_volume_cover({
-            "volumeId": volume,
-            "file": filename
-        })
-        self.database.commit_changes()
+            filename = CACHE_FOLDER + "/" + hashlib.md5(str(time.time()).encode()).hexdigest() + ".png"
+            with open(filename, 'wb') as f:
+                f.write(response.content)
+                
+            # caching
+            self.database.add_volume_cover({
+                "volumeId": volume,
+                "file": filename
+            })
+            self.database.commit_changes()
 
         return filename
     
@@ -306,25 +313,26 @@ class KavitaAPI():
             filename = self.database.search_manga_pics(id, page)
         if len(filename) > 0:
             return filename
-
-        url = self.url + f"reader/image?chapterId={id}&apiKey={self.api_key}&page={page}"
-        response = requests.get(
-            url,
-            headers={
-                "Content-Type": "image/png",
-            }
-        )
-        filename = CACHE_FOLDER + "/" + hashlib.md5(str(time.time()).encode()).hexdigest() + ".png"
         
-        with open(filename, 'wb') as f:
-            f.write(response.content)
+        if not self.offline_mode:
+            url = self.url + f"reader/image?chapterId={id}&apiKey={self.api_key}&page={page}"
+            response = requests.get(
+                url,
+                headers={
+                    "Content-Type": "image/png",
+                }
+            )
+            filename = CACHE_FOLDER + "/" + hashlib.md5(str(time.time()).encode()).hexdigest() + ".png"
+            
+            with open(filename, 'wb') as f:
+                f.write(response.content)
 
-        with self.lock:
-            self.database.add_manga_pic({
-                "chapter_id": id, 
-                "page": page, 
-                "file": filename
-            })
+            with self.lock:
+                self.database.add_manga_pic({
+                    "chapter_id": id, 
+                    "page": page, 
+                    "file": filename
+                })
 
         return filename
     
