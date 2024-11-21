@@ -27,7 +27,7 @@ const App: React.FC = () => {
     console.log(route)
   };
 
-  const handleKey = (event: React.KeyboardEvent) => {
+  const handleKey: (this: Window, ev: KeyboardEvent) => any = function (this: Window, event: KeyboardEvent) {
     switch (event.key) {
       case "ArrowUp":
         setCurrentKeyPressed("ArrowUp");

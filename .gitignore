@@ -20,3 +20,4 @@ src-tauri/backend/dist/cache/*.png
 src-tauri/backend/dist/*.sqlite
 dist/*
 package-lock.json
+node_modules/*
