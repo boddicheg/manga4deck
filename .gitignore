@@ -14,5 +14,9 @@ build/app/localpycs/*
 dist/app.exe
 app/src-tauri/backend/build/*
 app/src-tauri/backend/lib/__pycache__/*
-app/src-tauri/backend/cache.sqlite
+app/src-tauri/backend/*.sqlite
 app/package-lock.json
+src-tauri/backend/dist/cache/*.png
+src-tauri/backend/dist/*.sqlite
+dist/*
+package-lock.json

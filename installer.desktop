@@ -1,8 +1,0 @@
-#!/usr/bin/env xdg-open
-[Desktop Entry]
-Name=Install manga4deck
-Exec=sh -c 'rm -f /tmp/install.sh; if curl -S -s -L -O --output-dir /tmp/ --connect-timeout 60 https://raw.githubusercontent.com/boddicheg/manga4deck/main/install.sh; then chmod +x /tmp/install.sh && bash /tmp/install.sh; else echo "Something went wrong, please report this if it is a bug"; read; fi'
-Icon=steamdeck-gaming-return
-Terminal=true
-Type=Application
-StartupNotify=false
