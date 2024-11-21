@@ -15,3 +15,4 @@ dist/app.exe
 app/src-tauri/backend/build/*
 app/src-tauri/backend/lib/__pycache__/*
 app/src-tauri/backend/cache.sqlite
+app/package-lock.json
