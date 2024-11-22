@@ -7,6 +7,7 @@ PyInstaller.__main__.run([
     'app.py',
     '--onefile',
     "--console",
+    "--name=app.exe"
 ], )
 
 # shutil.copytree('path/', 'dist/path')

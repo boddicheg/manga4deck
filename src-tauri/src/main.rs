@@ -9,11 +9,7 @@ fn main() {
         .setup(|app| {
             let app_handle = app.handle();
             // Determine the path to the bundled Python executable based on the platform
-            let resource_path = if cfg!(target_os = "windows") {
-                "backend/dist/app.exe"
-            } else {
-                "backend/dist/app"
-            };
+            let resource_path = "backend/dist/app.exe";
 
             // Resolve the path to the resource file
             let python_executable = app_handle
