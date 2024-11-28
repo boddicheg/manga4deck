@@ -31,6 +31,9 @@ def library():
 @app.route('/api/series/<library>', methods=['GET'])
 def series(library):
     s = kavita.get_series(str(library))
+    # precaching serie covers
+    for serie in s:
+        kavita.get_series_cover(str(serie["id"]))
     return jsonify(s)
 
 @app.route('/api/series-cover/<id>', methods=['GET'])
@@ -40,8 +43,11 @@ def series_cover(id):
 
 @app.route('/api/volumes/<series>', methods=['GET'])
 def volumes(series):
-    s = kavita.get_volumes(str(series))
-    return jsonify(s)
+    v = kavita.get_volumes(str(series))
+    # precaching volume covers
+    for volume in v:
+        kavita.get_volume_cover(str(volume["volume_id"]))
+    return jsonify(v)
 
 @app.route('/api/volumes-cover/<volume>', methods=['GET'])
 def volume_cover(volume):

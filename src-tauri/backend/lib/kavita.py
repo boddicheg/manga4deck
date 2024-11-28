@@ -9,12 +9,43 @@ import atexit
 
 from lib.db import *
 
-def get_executable_path(relative_path):
-    base_path = os.path.dirname(sys.executable)
-    return os.path.join(base_path, relative_path)
+import sys
+import pathlib
 
-DB_PATH = get_executable_path("cache.sqlite")
-CACHE_FOLDER = get_executable_path("cache")
+def get_datadir() -> pathlib.Path:
+
+    """
+    Returns a parent directory path
+    where persistent application data can be stored.
+
+    # linux: ~/.local/share
+    # macOS: ~/Library/Application Support
+    # windows: C:/Users/<USER>/AppData/Roaming
+    """
+
+    home = pathlib.Path.home()
+
+    if sys.platform == "win32":
+        return home / "AppData/Roaming"
+    elif sys.platform == "linux":
+        return home / ".local/share"
+    elif sys.platform == "darwin":
+        return home / "Library/Application Support"
+
+def get_appdir_path(relative_path):
+    datadir = get_datadir() / "manga4deck"
+    
+    try:
+        datadir.mkdir(parents=True)
+    except FileExistsError:
+        pass
+    
+    datadir = datadir / relative_path
+    print(str(datadir))
+    return str(datadir)
+
+DB_PATH = get_appdir_path("cache.sqlite")
+CACHE_FOLDER = get_appdir_path("cache")
 
 class KavitaAPI():
     def __init__(self, ip, username, password, api_key):
@@ -167,18 +198,20 @@ class KavitaAPI():
             )
         
             library = json.loads(response.content)
-            for e in library:
-                row = {
-                    "id": e["id"],
-                    "title": e["name"]
-                }
-                result.append(row)
-                # caching for future needs
-                self.database.add_library(row)
-            self.database.commit_changes()
+            with self.lock:
+                for e in library:
+                    row = {
+                        "id": e["id"],
+                        "title": e["name"]
+                    }
+                    result.append(row)
+                    # caching for future needs
+                    self.database.add_library(row)
+                self.database.commit_changes()
         else:
             # load from cache:
-            result = self.database.get_libraries()
+            with self.lock:
+                result = self.database.get_libraries()
 
         return result
     
@@ -214,7 +247,8 @@ class KavitaAPI():
                     }
                     result.append(row)
         else:
-            result = self.database.get_series()
+            with self.lock:
+                result = self.database.get_series()
 
         return result
     
@@ -238,11 +272,12 @@ class KavitaAPI():
             with open(filename, 'wb') as f:
                 f.write(response.content)
             
-            self.database.add_series_cover({
-                "seriesId": series,
-                "file": filename
-            })
-            self.database.commit_changes()
+            with self.lock:
+                self.database.add_series_cover({
+                    "seriesId": series,
+                    "file": filename
+                })
+                self.database.commit_changes()
 
         return filename
     
@@ -272,7 +307,8 @@ class KavitaAPI():
                         }
                         result.append(row)
         else:
-            result = self.database.get_volumes(parent)
+            with self.lock:
+                result = self.database.get_volumes(parent)
         
         return result
     
@@ -298,11 +334,12 @@ class KavitaAPI():
                 f.write(response.content)
                 
             # caching
-            self.database.add_volume_cover({
-                "volumeId": volume,
-                "file": filename
-            })
-            self.database.commit_changes()
+            with self.lock:
+                self.database.add_volume_cover({
+                    "volumeId": volume,
+                    "file": filename
+                })
+                self.database.commit_changes()
 
         return filename
     
@@ -354,15 +391,17 @@ class KavitaAPI():
                 }
             )
         else:
-            self.database.add_progress(ids)
-            self.database.set_volume_as_read(ids["volume_id"], ids["series_id"], ids["page"])
-            self.database.set_series_read_pages(ids["series_id"], ids["page"])
+            with self.lock:
+                self.database.add_progress(ids)
+                self.database.set_volume_as_read(ids["volume_id"], ids["series_id"], ids["page"])
+                self.database.set_series_read_pages(ids["series_id"], ids["page"])
 
     def upload_progress(self):
         if not self.offline_mode:
-            for record in self.database.get_progress():
-                self.save_progress(record)
-            self.database.clean_progress()
+            with self.lock:
+                for record in self.database.get_progress():
+                    self.save_progress(record)
+                self.database.clean_progress()
             
     def set_volume_as_read(self, series_id, volume_id):
         url = self.url + f"reader/mark-volume-read"
@@ -379,7 +418,8 @@ class KavitaAPI():
                 }
             )
         else:
-            self.database.set_volume_as_read(volume_id, series_id)
+            with self.lock:
+                self.database.set_volume_as_read(volume_id, series_id)
 
     def update_server_library(self):
         url = self.url + f"library/scan-all"
