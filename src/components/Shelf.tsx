@@ -94,8 +94,8 @@ const Shelf: React.FC = () => {
 
   return (
     <>
-      <div className="min-h-screen bg-gray-100 p-8">
-        <h1 className="text-3xl font-bold mb-6 text-center">
+      <div className="w-full h-screen p-4 bg-zinc-900">
+        <h1 className="text-3xl text-white font-bold mb-6 text-center">
           Libraries
         </h1>
   
@@ -106,14 +106,22 @@ const Shelf: React.FC = () => {
               data-route={"/library/" + library.id}
               ref={(el) => (divRefs.current[index] = el)}
               tabIndex={-1}
-              className={`p-4 border rounded focus:outline-none ${
+              className={`
+              border-2 
+              rounded 
+              bg-gray-300
+              min-h-[200px]
+              min-w-[150px]
+              m-3
+              inline-block
+              ${
                 currentIndex === index
-                  ? "border-blue-500 bg-blue-100"
+                  ? "border-2 border-red-500"
                   : "border-gray-300"
               }`}
             >
-              <h2 className="text-lg font-semibold">{library.title} / {library.id}</h2>
-              <p className="text-sm text-gray-600">Test</p>
+              <h1 className="text-2xl text-center font-bold mt-12">{library.title}</h1>
+              <p className="text-sm text-gray-600 text-center mt-2">Test desc</p>
             </div>
           ))}
         </div>

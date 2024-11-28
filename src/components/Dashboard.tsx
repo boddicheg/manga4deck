@@ -2,11 +2,6 @@ import React, { useEffect, useState, useRef } from "react";
 import { fetchServerStatus } from "../services/Api";
 import { useNavigate } from "react-router-dom";
 
-const dashboardTiles = [
-    { id: 0, title: "Kavita Library"},
-    { id: 1, title: "Exit"}
-]
-
 const Dashboard: React.FC = () => {
     const [serverStatus, setServerStatus] = useState<string>("");
     const [currentKeyPressed, setCurrentKeyPressed] = useState<string>("");
@@ -25,12 +20,12 @@ const Dashboard: React.FC = () => {
     const cycleFocus = (direction: "next" | "prev") => {
         const nextIndex =
         direction === "next"
-          ? currentIndex + 1 >= divRefs.current.length
-            ? divRefs.current.length - 1
-            : currentIndex + 1
-          : currentIndex - 1 < 0
+          ? currentIndexRef.current + 1 >= 5
+            ? 5 - 1
+            : currentIndexRef.current + 1
+          : currentIndexRef.current - 1 < 0
           ? 0
-          : currentIndex - 1;
+          : currentIndexRef.current - 1;
 
       setCurrentIndex(nextIndex);
       divRefs.current[nextIndex]?.focus(); 
@@ -111,11 +106,11 @@ const Dashboard: React.FC = () => {
     }
   
     return (
-      <div className="min-h-screen bg-gray-100 p-8">
-        <h1 className="text-3xl font-bold mb-6 text-center">
+      <div className="w-full h-screen p-4 bg-zinc-900">
+        <h1 className="text-3xl text-white font-bold mb-6 text-center">
           Server status: {serverStatus}
         </h1>
-        <h1 className="text-3xl font-bold mb-6 text-center">
+        <h1 className="text-3xl text-white font-bold mb-6 text-center">
           Key pressed: {currentKeyPressed}
         </h1>
   
@@ -126,30 +121,120 @@ const Dashboard: React.FC = () => {
             onClick={() => navigateTo("/shelf")}
             ref={(el) => (divRefs.current[0] = el)} // Assign ref
             tabIndex={-1} // Make it focusable but not in tab order
-            className={`p-4 border rounded focus:outline-none ${
+            className={`
+            border-2 
+            rounded 
+            bg-gray-300
+            min-h-[200px]
+            min-w-[150px]
+            m-3
+            inline-block
+            ${
               currentIndex === 0
-                ? "border-blue-500 bg-blue-100"
+                ? "border-2 border-red-500 "
                 : "border-gray-300"
             }`}
           >
-            <h2 className="text-lg font-semibold">Kavita Library</h2>
-            <p className="text-sm text-gray-600">Library size</p>
+            <div className="text-lg text-center font-bold mt-12">Kavita</div>
+            <div className="text-sm text-gray-600 text-center">192.168.5.73:5001</div>
           </div>
+
           <div
             key={1}
             data-route={"/"}
             onClick={() => navigateTo("/")}
             ref={(el) => (divRefs.current[1] = el)} // Assign ref
             tabIndex={-1} // Make it focusable but not in tab order
-            className={`p-4 border rounded focus:outline-none ${
+            className={`
+            border-2 
+            rounded 
+            bg-gray-300
+            min-h-[200px]
+            min-w-[150px]
+            m-3
+            inline-block
+            ${
               currentIndex === 1
-                ? "border-blue-500 bg-blue-100"
+                ? "border-2 border-red-500 "
                 : "border-gray-300"
             }`}
           >
-            <h2 className="text-lg font-semibold">Exit</h2>
-            <p className="text-sm text-gray-600"></p>
+            <div className="text-lg text-center font-bold mt-12">Clean Cache</div>
+            <div className="text-sm text-gray-600 text-center">Size: 1.3Gb</div>
           </div>
+
+          <div
+            key={2}
+            data-route={"/"}
+            onClick={() => navigateTo("/")}
+            ref={(el) => (divRefs.current[2] = el)} // Assign ref
+            tabIndex={-1} // Make it focusable but not in tab order
+            className={`
+            border-2 
+            rounded 
+            bg-gray-300
+            min-h-[200px]
+            min-w-[150px]
+            m-3
+            inline-block
+            ${
+              currentIndex === 2
+                ? "border-2 border-red-500 "
+                : "border-gray-300"
+            }`}
+          >
+            <div className="text-lg text-center font-bold mt-12">Update</div>
+            <div className="text-sm text-gray-600 text-center">Server Kavita</div>
+          </div>
+
+          <div
+            key={3}
+            data-route={"/"}
+            onClick={() => navigateTo("/")}
+            ref={(el) => (divRefs.current[3] = el)} // Assign ref
+            tabIndex={-1} // Make it focusable but not in tab order
+            className={`
+            border-2 
+            rounded 
+            bg-gray-300
+            min-h-[200px]
+            min-w-[150px]
+            m-3
+            inline-block
+            ${
+              currentIndex === 3
+                ? "border-2 border-red-500 "
+                : "border-gray-300"
+            }`}
+          >
+            <div className="text-lg text-center font-bold mt-12">Offline mode</div>
+            <div className="text-sm text-gray-600 text-center">Only cached available</div>
+          </div>
+
+          <div
+            key={4}
+            data-route={"/"}
+            onClick={() => navigateTo("/")}
+            ref={(el) => (divRefs.current[4] = el)} // Assign ref
+            tabIndex={-1} // Make it focusable but not in tab order
+            className={`
+            border-2 
+            rounded 
+            bg-gray-300
+            min-h-[200px]
+            min-w-[150px]
+            m-3
+            inline-block
+            ${
+              currentIndex === 4
+                ? "border-2 border-red-500"
+                : "border-gray-300"
+            }`}
+          >
+            <div className="text-lg text-center font-bold mt-12">Exit</div>
+            <div className="text-sm text-gray-600 text-center">Close app</div>
+          </div>
+
         </div>
       </div>
     );

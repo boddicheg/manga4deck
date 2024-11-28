@@ -101,34 +101,65 @@ const Series: React.FC = () => {
 
   return (
     <>
-    <div className="min-h-screen bg-gray-100 p-8">
-      <h1 className="text-3xl font-bold mb-6 text-center">
-      Volumes / {id}
+    <div className="w-full h-screen p-4 bg-zinc-900">
+      <h1 className="text-3xl text-white font-bold mb-6 text-center">
+        Volumes
       </h1>
 
       <div className="grid grid-cols-8 gap-4">
         {volumes.map((volume, index) => (
-          <div
-            key={index}
-            data-route={`/viewer/${volume.chapter_id}/${volume.read}`}
-            ref={(el) => (divRefs.current[index] = el)} // Assign ref
-            tabIndex={-1} // Make it focusable but not in tab order
-            className={`p-4 border rounded focus:outline-none ${
-              currentIndex === index
-                ? "border-blue-500 bg-blue-100"
-                : "border-gray-300"
-            }`}
-            style={{
-              width: "150px",
-              height: "200px",
-              backgroundImage: `url(http://localhost:1337/api/volumes-cover/${volume.volume_id})`,
-              backgroundSize: "cover",
-              backgroundPosition: "center",
-            }}
-          >
-            <h2 className="text-lg font-semibold">{volume.title}</h2>
-            <p className="text-sm text-gray-600">Test</p>
-          </div>
+          <div>
+            <div
+              key={index}
+              data-route={`/viewer/${volume.chapter_id}/${volume.pages}/${volume.read}`}
+              ref={(el) => (divRefs.current[index] = el)} // Assign ref
+              tabIndex={-1} // Make it focusable but not in tab order
+              className={`p-4 border rounded focus:outline-none ${
+                currentIndex === index
+                  ? "border-2 border-red-500"
+                  : "border-gray-300"
+              }`}
+              style={{
+                width: "150px",
+                height: "200px",
+                backgroundImage: `url(http://localhost:1337/api/volumes-cover/${volume.volume_id})`,
+                backgroundSize: "cover",
+                backgroundPosition: "center",
+              }}
+            >
+            </div>
+            <div
+                className={`text-white truncate text-center min-w-[150px] pl-1 pr-1 ${
+                  volume.read === volume.pages
+                    ? "bg-green-700"
+                    : "" 
+                }
+                
+                ${
+                  currentIndex === index
+                  ? "text-red-500"
+                  : "text-white"
+                }
+                `}
+              >
+                {volume.title}
+              </div>
+              <div
+                className={`text-white text-sm truncate text-center text-sm min-w-[150px] pl-1 pr-1 ${
+                  volume.read === volume.pages
+                    ? "bg-green-700"
+                    : ""
+                }
+                ${
+                  currentIndex === index
+                  ? "text-red-500"
+                  : "text-white"
+                }
+                `}
+              >
+                {volume.read}/{volume.pages}
+              </div>
+            </div>
         ))}
       </div>
     </div>
