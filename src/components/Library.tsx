@@ -122,7 +122,7 @@ const Library: React.FC = () => {
                 style={{
                   width: "150px",
                   height: "200px",
-                  backgroundImage: `url(http://localhost:1337/api/series-cover/${serie.id})`,
+                  backgroundImage: `url(http://localhost:11337/api/series-cover/${serie.id})`,
                   backgroundSize: "cover",
                   backgroundPosition: "center",
                 }}
