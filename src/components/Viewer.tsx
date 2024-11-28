@@ -58,7 +58,7 @@ const Viewer: React.FC = () => {
                 ref={(el) => (divRefs.current[pageIdx] = el)}
                 onLoad={handleImageLoad}
                 src={
-                  "http://localhost:1337/api/picture/" + id + "/" + (pageIdx + 1)
+                  "http://localhost:11337/api/picture/" + id + "/" + (pageIdx + 1)
                 }
                 alt=""
                 className="max-w-[800px]"

@@ -21,3 +21,7 @@ src-tauri/backend/dist/*.sqlite
 dist/*
 package-lock.json
 node_modules/*
+src-tauri/Cargo.lock
+src-tauri/backend/build/app.exe
+*.pyc
+src-tauri/backend/app.exe.spec

@@ -3,7 +3,7 @@ export interface ServerStatusInterface {
 }
 
 export const fetchServerStatus = async (): Promise<ServerStatusInterface> => {
-  const response = await fetch("http://127.0.0.1:1337/api/status");
+  const response = await fetch("http://localhost:11337/api/status");
   if (!response.ok) {
     throw new Error("Network response was not ok");
   }
@@ -18,7 +18,7 @@ export interface LibraryResponseInterface {
 export const fetchLibrary = async (): Promise<
   Array<LibraryResponseInterface>
 > => {
-  const response = await fetch("http://127.0.0.1:1337/api/library");
+  const response = await fetch("http://localhost:11337/api/library");
   if (!response.ok) {
     throw new Error("Network response was not ok");
   }
@@ -37,7 +37,7 @@ export const fetchSeries= async (
 ): Promise<
   Array<SeriesResponseInterface>
 > => {
-  const response = await fetch("http://127.0.0.1:1337/api/series/" + id);
+  const response = await fetch("http://localhost:11337/api/series/" + id);
   if (!response.ok) {
     throw new Error("Network response was not ok");
   }
@@ -58,7 +58,7 @@ export const fetchVolumes= async (
 ): Promise<
   Array<VolumeResponseInterface>
 > => {
-  const response = await fetch("http://127.0.0.1:1337/api/volumes/" + id);
+  const response = await fetch("http://localhost:11337/api/volumes/" + id);
   if (!response.ok) {
     throw new Error("Network response was not ok");
   }
