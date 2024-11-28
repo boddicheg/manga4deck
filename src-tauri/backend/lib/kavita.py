@@ -9,12 +9,43 @@ import atexit
 
 from lib.db import *
 
-def get_executable_path(relative_path):
-    base_path = os.path.dirname(sys.executable)
-    return os.path.join(base_path, relative_path)
+import sys
+import pathlib
 
-DB_PATH = get_executable_path("cache.sqlite")
-CACHE_FOLDER = get_executable_path("cache")
+def get_datadir() -> pathlib.Path:
+
+    """
+    Returns a parent directory path
+    where persistent application data can be stored.
+
+    # linux: ~/.local/share
+    # macOS: ~/Library/Application Support
+    # windows: C:/Users/<USER>/AppData/Roaming
+    """
+
+    home = pathlib.Path.home()
+
+    if sys.platform == "win32":
+        return home / "AppData/Roaming"
+    elif sys.platform == "linux":
+        return home / ".local/share"
+    elif sys.platform == "darwin":
+        return home / "Library/Application Support"
+
+def get_appdir_path(relative_path):
+    datadir = get_datadir() / "manga4deck"
+    
+    try:
+        datadir.mkdir(parents=True)
+    except FileExistsError:
+        pass
+    
+    datadir = datadir / relative_path
+    print(str(datadir))
+    return str(datadir)
+
+DB_PATH = get_appdir_path("cache.sqlite")
+CACHE_FOLDER = get_appdir_path("cache")
 
 class KavitaAPI():
     def __init__(self, ip, username, password, api_key):
