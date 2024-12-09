@@ -1,5 +1,28 @@
-export interface ServerStatusInterface {
+export interface CommandStatusInterface {
   status: string;
+}
+
+export const fetchUpdateLibrary = async (): Promise<CommandStatusInterface> => {
+  const response = await fetch("http://localhost:11337/api/update-lib");
+  if (!response.ok) {
+    throw new Error("Network response was not ok");
+  }
+  return await response.json();
+};
+
+export const fetchClearCache = async (): Promise<CommandStatusInterface> => {
+  const response = await fetch("http://localhost:11337/api/clear-cache");
+  if (!response.ok) {
+    throw new Error("Network response was not ok");
+  }
+  return await response.json();
+};
+
+export interface ServerStatusInterface {
+  status: boolean;
+  ip: string;
+  logged_as: string;
+  cache: number;
 }
 
 export const fetchServerStatus = async (): Promise<ServerStatusInterface> => {
