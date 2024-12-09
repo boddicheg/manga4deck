@@ -14,12 +14,19 @@ const Dashboard: React.FC = () => {
   const currentIndexRef = useRef(currentIndex);
   const [loading, setLoading] = useState<boolean>(true);
   const [, setError] = useState<string | null>(null);
-  const [command, setCommand] = useState<string | null>(null);
   const navigate = useNavigate();
   const fetchInterval = 5000; // Fetch every 5 seconds
 
   async function exitApp() {
     await invoke("exit_app", {});
+  }
+
+  const updateLib = async () => {
+    await fetchUpdateLibrary();
+  }
+
+  const cleanCache = async () => {
+    await fetchClearCache();
   }
 
   const navigateTo = (uri: string | null | undefined) => {
@@ -48,13 +55,17 @@ const Dashboard: React.FC = () => {
     const exit_ = async () => {
       await exitApp();
     };
+    const cleanCache_ = async () => {
+      await cleanCache();
+      getServerStatus();
+    };
+    const updateLib_ = async () => {
+      await updateLib();
+      
+    };
     if (route == "/exit-app") exit_();
-    if (route == "/clean-cache") {
-      setCommand("clean-cache")
-    }
-    else if (route == "/update-lib") {
-      setCommand("update-lib")
-    }
+    else if (route == "/clean-cache") cleanCache_();
+    else if (route == "/update-lib") updateLib_();
     else navigateTo(route);
   };
 
@@ -88,14 +99,6 @@ const Dashboard: React.FC = () => {
         console.log(`Key pressed: ${event.key}`);
     }
   };
-
-  const updateLib = async () => {
-    await fetchUpdateLibrary();
-  }
-
-  const clearCache = async () => {
-    await fetchClearCache();
-  }
 
   const getServerStatus = async () => {
     setLoading(true);
@@ -133,12 +136,6 @@ const Dashboard: React.FC = () => {
   useEffect(() => {
     currentIndexRef.current = currentIndex;
   }, [currentIndex]);
-
-  useEffect(() => {
-    console.log(command)
-    if (command == "update-lib") updateLib();
-    if (command == "clean-cache") clearCache();
-  }, [command]);
 
   return (
     <div className="w-full h-screen p-4 bg-zinc-900">
@@ -181,8 +178,7 @@ const Dashboard: React.FC = () => {
 
         <div
           key={1}
-          data-route={"/"}
-          onClick={() => navigateTo("/")}
+          data-route={"/clean-cache"}
           ref={(el) => (divRefs.current[1] = el)} // Assign ref
           tabIndex={-1} // Make it focusable but not in tab order
           className={`
@@ -226,7 +222,7 @@ const Dashboard: React.FC = () => {
 
         <div
           key={3}
-          data-route={"/"}
+          data-route={"/exit"}
           onClick={() => navigateTo("/")}
           ref={(el) => (divRefs.current[3] = el)} // Assign ref
           tabIndex={-1} // Make it focusable but not in tab order
