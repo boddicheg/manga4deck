@@ -7,10 +7,43 @@ interface ViewerParams {
 
 const Viewer: React.FC = () => {
   const { id, pages, read } = useParams<ViewerParams>();
-  const pagesIndices = Array.from({ length: +pages! }, (_, index) => index);
-  const divRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const [loadedImages, setLoadedImages] = useState<number>(0);
   const navigate = useNavigate();
+  // Current page
+  const [currentPage, setCurrentPage] = useState(+read!);
+  const currentPageRef = useRef(currentPage);
+
+  const getCurrentPageImage = () => {
+    return "http://localhost:11337/api/picture/" + id + "/" + currentPageRef.current;
+  };
+
+  const changeImageSrc = () => {
+    document.getElementById("image-container")?.replaceChildren("");
+    const img = new Image();
+    img.src = getCurrentPageImage();
+    console.log(img.src)
+
+    img.onload = () => {
+      console.log("onload: ", img.width, "x", img.height)
+      document.getElementById("image-container")?.replaceChildren(img);
+    };
+
+    img.onerror = () => {
+      console.error("Failed to load the image.");
+    };
+  };
+
+  const cycleFocus = (direction: "next" | "prev") => {
+    const nextIndex =
+      direction === "next"
+        ? currentPageRef.current + 1 >= +pages!
+          ? +pages! - 1
+          : currentPageRef.current + 1
+        : currentPageRef.current - 1 < 0
+          ? 0
+          : currentPageRef.current - 1;
+    console.log(direction, nextIndex)
+    setCurrentPage(nextIndex);
+  };
 
   const handleKey: (this: Window, ev: KeyboardEvent) => any = function (
     this: Window,
@@ -18,8 +51,12 @@ const Viewer: React.FC = () => {
   ) {
     switch (event.key) {
       case "ArrowLeft":
+        cycleFocus("prev")
+        // changeImageSrc()
         break;
       case "ArrowRight":
+        cycleFocus("next")
+        // changeImageSrc()
         break;
       case "Backspace":
         navigate(-1);
@@ -29,11 +66,8 @@ const Viewer: React.FC = () => {
     }
   };
 
-  const handleImageLoad = () => {
-    setLoadedImages((prevLoaded) => prevLoaded + 1);
-  };
-
   useEffect(() => {
+    changeImageSrc()
     window.addEventListener("keydown", handleKey);
     return () => {
       window.removeEventListener("keydown", handleKey); // Clean up
@@ -41,31 +75,18 @@ const Viewer: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (loadedImages == +pages!)
-      divRefs.current[+read! - 1]?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-  }, [loadedImages]);
+    currentPageRef.current = currentPage;
+    changeImageSrc();
+    window.scrollTo(0, 0);
+  }, [currentPage]);
 
   return (
     <>
-      <div className="w-full h-full p-4 bg-zinc-900 min-w-[1280px]">
-        <ul className="grid place-content-center">
-          {pagesIndices.map((pageIdx) => (
-            <li>
-              <img
-                ref={(el) => (divRefs.current[pageIdx] = el)}
-                onLoad={handleImageLoad}
-                src={
-                  "http://localhost:11337/api/picture/" + id + "/" + (pageIdx + 1)
-                }
-                alt=""
-                className="max-w-[800px]"
-              />
-            </li>
-          ))}
-        </ul>
+      <div className="w-full h-full p-4 bg-zinc-900 min-w-[1280px] min-h-[800px] grid place-content-center">
+        <div className="text-white mb-3 text-center">
+          {currentPage} / {pages}
+        </div>
+        <div id="image-container" className="mb-4 max-w-[800px]"></div>
       </div>
     </>
   );
