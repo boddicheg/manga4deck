@@ -128,7 +128,7 @@ const Series: React.FC = () => {
           <div>
             <div
               key={index}
-              data-route={`/viewer/${volume.chapter_id}/${volume.pages}/${volume.read}`}
+              data-route={`/viewer/${volume.series_id}/${volume.volume_id}/${volume.chapter_id}/${volume.pages}/${volume.read}`}
               ref={(el) => (divRefs.current[index] = el)} // Assign ref
               tabIndex={-1} // Make it focusable but not in tab order
               className={`p-4 border rounded focus:outline-none ${

@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "app",
+        "title": "Manga4Deck",
         "width": 1280,
         "height": 800
       }
