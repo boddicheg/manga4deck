@@ -71,7 +71,10 @@ def cache_clear():
 
 @app.route('/api/cache/serie/<id>', methods=['GET'])
 def cache_serie(id):
-    kavita.cache_serie(id, None)
+    try:
+        kavita.cache_serie({ "id": int(id), "title": ""}, None)
+    except Exception as e:
+        print(e)
     return jsonify(status="started")
 
 @app.route('/api/update-lib', methods=['GET'])

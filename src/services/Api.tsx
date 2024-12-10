@@ -53,6 +53,7 @@ export interface SeriesResponseInterface {
     pages: number;
     read: number;
     title: string;
+    cached: boolean;
 }
 
 export const fetchSeries= async (
@@ -74,6 +75,7 @@ export interface VolumeResponseInterface {
     series_id: number;
     title: string;
     volume_id: number;
+    cached: boolean;
 }
 
 export const fetchVolumes= async (
@@ -82,6 +84,17 @@ export const fetchVolumes= async (
   Array<VolumeResponseInterface>
 > => {
   const response = await fetch("http://localhost:11337/api/volumes/" + id);
+  if (!response.ok) {
+    throw new Error("Network response was not ok");
+  }
+  return await response.json();
+};
+
+
+export const fetchCacheSeries = async (
+  id: string | undefined
+): Promise<CommandStatusInterface> => {
+  const response = await fetch("http://localhost:11337/api/cache/serie/" + id);
   if (!response.ok) {
     throw new Error("Network response was not ok");
   }
