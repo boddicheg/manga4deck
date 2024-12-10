@@ -1,8 +1,8 @@
 [package]
 name = "manga4deck"
-version = "0.3.2"
-description = "A Tauri App"
-authors = ["you"]
+version = "0.3.3"
+description = "Manga reader for Kavita on Steam Deck"
+authors = ["boddicheg"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

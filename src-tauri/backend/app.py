@@ -59,9 +59,15 @@ def volume_cover(volume):
     cover = kavita.get_volume_cover(str(volume))
     return send_file(cover, as_attachment=True)
 
-@app.route('/api/picture/<chapter>/<page>', methods=['GET'])
-def picture(chapter, page):
+@app.route('/api/picture/<series>/<volume>/<chapter>/<page>', methods=['GET'])
+def picture(series, volume, chapter, page):
     image = kavita.get_picture(chapter, page)
+    kavita.save_progress({
+        "series_id": series,
+        "volume_id": volume,
+        "chapter_id": chapter,
+        "page": page
+    })
     return send_file(image, as_attachment=True)
 
 @app.route('/api/clear-cache', methods=['GET'])

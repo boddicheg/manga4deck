@@ -387,10 +387,10 @@ class KavitaAPI():
     def save_progress(self, ids):
         url = self.url + f"reader/progress"
         if not self.offline_mode:
-            requests.post(
+            response = requests.post(
                 url,
                 json = {
-                    "libraryId": ids["library_id"],
+                    # "libraryId": ids["library_id"],
                     "seriesId": ids["series_id"],
                     "volumeId": ids["volume_id"],
                     "chapterId": ids["chapter_id"],

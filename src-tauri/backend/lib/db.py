@@ -226,13 +226,13 @@ class DBSession:
 # -----------------------------------------------------------------------------
 # Read Progress methods
     def add_progress(self, data):
-        keys = ["library_id", "series_id", "volume_id", "chapter_id", "page"]
+        keys = [ "series_id", "volume_id", "chapter_id", "page"]
         for k in keys:
             if k not in data.keys():
                 print(f"-> Can't find key {k} in params")
                 
         count = self.session.query(ReadProgress).filter_by(
-            library_id=data["library_id"],
+            library_id=2, # fix it later data["library_id"],
             series_id=data["series_id"],
             volume_id=data["volume_id"],
             chapter_id=data["chapter_id"],
@@ -240,7 +240,7 @@ class DBSession:
         ).count()
 
         if count == 0:
-            self.session.add(ReadProgress(library_id=data["library_id"],
+            self.session.add(ReadProgress(library_id=2, # fix it laterdata["library_id"],
                                             series_id=data["series_id"],
                                             volume_id=data["volume_id"],
                                             chapter_id=data["chapter_id"],

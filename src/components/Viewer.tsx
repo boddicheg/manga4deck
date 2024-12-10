@@ -6,14 +6,14 @@ interface ViewerParams {
 }
 
 const Viewer: React.FC = () => {
-  const { id, pages, read } = useParams<ViewerParams>();
+  const { series_id, volume_id, chapter_id, pages, read } = useParams<ViewerParams>();
   const navigate = useNavigate();
   // Current page
   const [currentPage, setCurrentPage] = useState(+read!);
   const currentPageRef = useRef(currentPage);
 
   const getCurrentPageImage = () => {
-    return "http://localhost:11337/api/picture/" + id + "/" + currentPageRef.current;
+    return "http://localhost:11337/api/picture/" + series_id + "/" + volume_id + "/" + chapter_id + "/" + currentPageRef.current;
   };
 
   const changeImageSrc = () => {
