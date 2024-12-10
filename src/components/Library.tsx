@@ -102,9 +102,9 @@ const Library: React.FC = () => {
   return (
     <>
       <div className="w-full h-full p-4 bg-zinc-900">
-        <h1 className="text-3xl text-white font-bold mb-6 text-center">
+        <div className="text-xl text-white font-bold mb-6 text-center">
           Series
-        </h1>
+        </div>
   
         <div className="grid grid-cols-8 gap-4">
           {series.map((serie, index) => (
@@ -132,7 +132,7 @@ const Library: React.FC = () => {
                 className={`text-white truncate text-center min-w-[150px] pl-1 pr-1 ${
                   serie.read === 100
                     ? "bg-green-700"
-                    : "" 
+                    : serie.cached ? "bg-yellow-500" : ""
                 }
                 
                 ${
@@ -148,7 +148,7 @@ const Library: React.FC = () => {
                 className={`text-white truncate text-center text-sm min-w-[150px] pl-1 pr-1 ${
                   serie.read === 100
                     ? "bg-green-700"
-                    : ""
+                    : serie.cached ? "bg-yellow-500" : ""
                 }
                 ${
                   currentIndex === index

@@ -4,6 +4,11 @@
 use std::process::{Command, Stdio};
 use tauri::{Manager, path::BaseDirectory};
 
+#[tauri::command]
+fn exit_app() {
+  std::process::exit(0x0);
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -26,7 +31,7 @@ fn main() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![])
+        .invoke_handler(tauri::generate_handler![exit_app])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

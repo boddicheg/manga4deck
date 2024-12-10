@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { VolumeResponseInterface, fetchVolumes } from "../services/Api";
+import { VolumeResponseInterface, fetchCacheSeries, fetchVolumes } from "../services/Api";
 
 interface SeriesParams {
     [id: string]: string | undefined;
@@ -15,6 +15,8 @@ const Series: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [currentIndex, setCurrentIndex] = useState(0);
     const currentIndexRef = useRef(currentIndex);
+
+    const fetchInterval = 1000;
   
     const navigate = useNavigate();
     const navigateTo = (uri: string | null | undefined) => {
@@ -73,6 +75,16 @@ const Series: React.FC = () => {
         case "Backspace":
           navigate(-1);
           break;
+        case "F1":
+          // F1 - mark volume as completed
+          break;
+        case "F2":
+          // F2 - cache whole serie
+          const startCaching = async (id: string | undefined) => {
+            await fetchCacheSeries(id);
+          }
+          startCaching(id)
+          break;
         default:
           console.log(`Key pressed: ${event.key}`);
       }
@@ -81,8 +93,10 @@ const Series: React.FC = () => {
     useEffect(() => {
       getSeries();
       window.addEventListener("keydown", handleKey);
+      const intervalId = setInterval(getSeries, fetchInterval);
       return () => {
-        window.removeEventListener("keydown", handleKey); // Clean up
+        window.removeEventListener("keydown", handleKey);
+        clearInterval(intervalId);
       };
     }, []);
   
@@ -102,9 +116,12 @@ const Series: React.FC = () => {
   return (
     <>
     <div className="w-full h-screen p-4 bg-zinc-900">
-      <h1 className="text-3xl text-white font-bold mb-6 text-center">
+      <div className="text-xl text-white font-bold mb-1 text-center">
         Volumes
-      </h1>
+      </div>
+      <div className="text-l text-white mb-2 text-center">
+        F1/Y - mark volume as read, F2/X - start cache all volumes
+      </div>
 
       <div className="grid grid-cols-8 gap-4">
         {volumes.map((volume, index) => (
@@ -132,7 +149,7 @@ const Series: React.FC = () => {
                 className={`text-white truncate text-center min-w-[150px] pl-1 pr-1 ${
                   volume.read === volume.pages
                     ? "bg-green-700"
-                    : "" 
+                    : volume.cached ? "bg-yellow-500" : "" 
                 }
                 
                 ${
@@ -148,7 +165,7 @@ const Series: React.FC = () => {
                 className={`text-white text-sm truncate text-center text-sm min-w-[150px] pl-1 pr-1 ${
                   volume.read === volume.pages
                     ? "bg-green-700"
-                    : ""
+                    : volume.cached ? "bg-yellow-500" : "" 
                 }
                 ${
                   currentIndex === index

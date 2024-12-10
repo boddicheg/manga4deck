@@ -2,3 +2,4 @@ requests
 sqlalchemy
 flask
 flask-cors
+PyInstaller

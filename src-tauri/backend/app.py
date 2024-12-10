@@ -21,7 +21,10 @@ CORS(app)
 @app.route('/api/status')
 def status():
     is_offline = kavita.get_offline_mode()
-    return jsonify(status=not is_offline)
+    ip = kavita.get_kavita_ip()
+    logged = kavita.logged_as
+    cache_size = get_cache_size()
+    return jsonify(status=not is_offline, ip=ip, logged_as=logged, cache=cache_size)
 
 @app.route('/api/library')
 def library():
@@ -34,6 +37,7 @@ def series(library):
     # precaching serie covers
     for serie in s:
         kavita.get_series_cover(str(serie["id"]))
+        serie["cached"] = kavita.is_series_cached(serie["id"])
     return jsonify(s)
 
 @app.route('/api/series-cover/<id>', methods=['GET'])
@@ -47,6 +51,7 @@ def volumes(series):
     # precaching volume covers
     for volume in v:
         kavita.get_volume_cover(str(volume["volume_id"]))
+        volume["cached"] = kavita.is_volume_cached(volume["volume_id"])
     return jsonify(v)
 
 @app.route('/api/volumes-cover/<volume>', methods=['GET'])
@@ -59,5 +64,23 @@ def picture(chapter, page):
     image = kavita.get_picture(chapter, page)
     return send_file(image, as_attachment=True)
 
+@app.route('/api/clear-cache', methods=['GET'])
+def cache_clear():
+    kavita.clear_manga_cache()
+    return jsonify(status="success")
+
+@app.route('/api/cache/serie/<id>', methods=['GET'])
+def cache_serie(id):
+    try:
+        kavita.cache_serie({ "id": int(id), "title": ""}, None)
+    except Exception as e:
+        print(e)
+    return jsonify(status="started")
+
+@app.route('/api/update-lib', methods=['GET'])
+def update_lib():
+    kavita.update_server_library()
+    return jsonify(status="success")
+
 if __name__ == '__main__':
-    app.run(port=11337, debug=True)
+    app.run(host='127.0.0.1', port=11337, debug=True)

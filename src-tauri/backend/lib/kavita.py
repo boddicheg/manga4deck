@@ -41,11 +41,20 @@ def get_appdir_path(relative_path):
         pass
     
     datadir = datadir / relative_path
-    print(str(datadir))
+    # print(str(datadir))
     return str(datadir)
 
 DB_PATH = get_appdir_path("cache.sqlite")
 CACHE_FOLDER = get_appdir_path("cache")
+
+def get_cache_size(delimiter = 1024 * 1024 * 1024):
+    files = os.listdir(CACHE_FOLDER)
+    size = 0
+    for f in files:
+        path = CACHE_FOLDER + "/" + f
+        stats = os.stat(path)
+        size += stats.st_size
+    return size / delimiter
 
 class KavitaAPI():
     def __init__(self, ip, username, password, api_key):
@@ -115,17 +124,19 @@ class KavitaAPI():
             file_path = os.path.join(CACHE_FOLDER, file)
             if os.path.isfile(file_path):
                 os.remove(file_path)
-
-        self.database.clean()
+        with self.lock:
+            self.database.clean()
 
     #--------------------------------------------------------------------------
     # Caching whole serie
     #--------------------------------------------------------------------------
     def is_series_cached(self, id):
-        return self.database.is_series_cached(id)
+        with self.lock:
+            return self.database.is_series_cached(id)
     
     def is_volume_cached(self, id):
-        return self.database.is_volume_cached(id)
+        with self.lock:
+            return self.database.is_volume_cached(id)
     
     def cache_serie_threaded(self):
         while self.running:
