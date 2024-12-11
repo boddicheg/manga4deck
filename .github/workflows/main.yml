@@ -37,7 +37,7 @@ jobs:
               repo: context.repo.repo,
               tag_name: `app-v${process.env.PACKAGE_VERSION}`,
               name: `Manga4Deck v${process.env.PACKAGE_VERSION}`,
-              body: 'Ttest build',
+              body: 'Test build',
               draft: true,
               prerelease: false
             })
@@ -57,8 +57,8 @@ jobs:
           #   args: "--target x86_64-apple-darwin"
           - platform: "ubuntu-22.04" # for Tauri v1 you could replace this with ubuntu-20.04.
             args: ""
-          - platform: "windows-latest"
-            args: ""
+          # - platform: "windows-latest"
+          #   args: ""
 
     runs-on: ${{ matrix.platform }}
     steps:
