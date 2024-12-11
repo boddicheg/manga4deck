@@ -49,15 +49,15 @@ export const fetchLibrary = async (): Promise<
 };
 
 export interface SeriesResponseInterface {
-    id: number;
-    pages: number;
-    read: number;
-    title: string;
-    cached: boolean;
+  id: number;
+  pages: number;
+  read: number;
+  title: string;
+  cached: boolean;
 }
 
-export const fetchSeries= async (
-    id: string | undefined
+export const fetchSeries = async (
+  id: string | undefined
 ): Promise<
   Array<SeriesResponseInterface>
 > => {
@@ -69,17 +69,17 @@ export const fetchSeries= async (
 };
 
 export interface VolumeResponseInterface {
-    chapter_id: number;
-    pages: number;
-    read: number;
-    series_id: number;
-    title: string;
-    volume_id: number;
-    cached: boolean;
+  chapter_id: number;
+  pages: number;
+  read: number;
+  series_id: number;
+  title: string;
+  volume_id: number;
+  cached: boolean;
 }
 
-export const fetchVolumes= async (
-    id: string | undefined
+export const fetchVolumes = async (
+  id: string | undefined
 ): Promise<
   Array<VolumeResponseInterface>
 > => {
@@ -90,11 +90,32 @@ export const fetchVolumes= async (
   return await response.json();
 };
 
-
 export const fetchCacheSeries = async (
   id: string | undefined
 ): Promise<CommandStatusInterface> => {
   const response = await fetch("http://localhost:11337/api/cache/serie/" + id);
+  if (!response.ok) {
+    throw new Error("Network response was not ok");
+  }
+  return await response.json();
+};
+
+export const fetchReadVolume = async (
+  series_id: string | undefined,
+  volume_id: string | undefined
+): Promise<CommandStatusInterface> => {
+  const response = await fetch("http://localhost:11337/api/read-volume/" + series_id + "/" + volume_id);
+  if (!response.ok) {
+    throw new Error("Network response was not ok");
+  }
+  return await response.json();
+};
+
+export const fetchUnReadVolume = async (
+  series_id: string | undefined,
+  volume_id: string | undefined
+): Promise<CommandStatusInterface> => {
+  const response = await fetch("http://localhost:11337/api/unread-volume/" + series_id + "/" + volume_id);
   if (!response.ok) {
     throw new Error("Network response was not ok");
   }
