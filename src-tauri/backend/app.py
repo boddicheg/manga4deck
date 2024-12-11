@@ -88,5 +88,15 @@ def update_lib():
     kavita.update_server_library()
     return jsonify(status="success")
 
+@app.route('/api/read-volume/<series_id>/<volume_id>', methods=['GET'])
+def read_volume(series_id, volume_id):
+    kavita.set_volume_as_read(series_id, volume_id)
+    return jsonify(status="success")
+
+@app.route('/api/unread-volume/<series_id>/<volume_id>', methods=['GET'])
+def unread_volume(series_id, volume_id):
+    kavita.set_volume_as_unread(series_id, volume_id)
+    return jsonify(status="success")
+
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=11337, debug=True)

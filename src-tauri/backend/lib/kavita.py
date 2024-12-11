@@ -432,6 +432,21 @@ class KavitaAPI():
             with self.lock:
                 self.database.set_volume_as_read(volume_id, series_id)
 
+    def set_volume_as_unread(self, series_id, volume_id):
+        url = self.url + f"reader/mark-volume-unread"
+        if not self.offline_mode:
+            requests.post(
+                url,
+                json = {
+                    "seriesId": series_id,
+                    "volumeId": volume_id
+                } ,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {self.token}"
+                }
+            )
+
     def update_server_library(self):
         url = self.url + f"library/scan-all"
         if not self.offline_mode:
