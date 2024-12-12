@@ -222,7 +222,7 @@ const Dashboard: React.FC = () => {
 
         <div
           key={3}
-          data-route={"/exit"}
+          data-route={"/exit-app"}
           onClick={() => navigateTo("/")}
           ref={(el) => (divRefs.current[3] = el)} // Assign ref
           tabIndex={-1} // Make it focusable but not in tab order
