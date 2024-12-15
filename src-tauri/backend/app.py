@@ -6,7 +6,7 @@ import os
 from lib.db import *
 from lib.kavita import *
 
-IP = "192.168.5.73:5001"
+IP = "192.168.5.75:5002"
 
 g_root = os.path.dirname(os.path.abspath(__file__))
 
