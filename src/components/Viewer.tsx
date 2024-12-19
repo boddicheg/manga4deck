@@ -36,7 +36,7 @@ const Viewer: React.FC = () => {
     const nextIndex =
       direction === "next"
         ? currentPageRef.current + 1 >= +pages!
-          ? +pages! - 1
+          ? +pages!
           : currentPageRef.current + 1
         : currentPageRef.current - 1 < 0
           ? 0
