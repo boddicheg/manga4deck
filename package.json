@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "kill": "kill-port 1420",
+    "kill": "kill-port 1420 && kill-port 11337",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"

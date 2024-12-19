@@ -74,26 +74,16 @@ const Dashboard: React.FC = () => {
     event: KeyboardEvent
   ) {
     switch (event.key) {
-      case "ArrowUp":
-        console.log("ArrowUp");
-        break;
-      case "ArrowDown":
-        console.log("ArrowDown");
-        break;
       case "ArrowLeft":
-        console.log("ArrowLeft");
         cycleFocus("prev");
         break;
       case "ArrowRight":
-        console.log("ArrowRight");
         cycleFocus("next");
         break;
       case "Enter":
-        console.log("Enter");
         enterDirectory();
         break;
       case "Backspace":
-        console.log("Backspace");
         break;
       default:
         console.log(`Key pressed: ${event.key}`);
