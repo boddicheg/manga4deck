@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from "react";
 import { fetchLibrary, LibraryResponseInterface } from "../services/Api";
 import { useNavigate } from "react-router-dom";
+import { useLocalStorage } from "../services/useLocalStorage";
 
 const Shelf: React.FC = () => {
   const [libraries, setLibrary] = useState<Array<LibraryResponseInterface>>([]);
@@ -9,6 +10,7 @@ const Shelf: React.FC = () => {
   const currentIndexRef = useRef(currentIndex);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const { setItem, getItem } = useLocalStorage("selected_library_id");
 
   const navigate = useNavigate();
   const navigateTo = (uri: string | null | undefined) => {
@@ -32,6 +34,8 @@ const Shelf: React.FC = () => {
   const enterDirectory = () => {
     const currentDiv = divRefs.current[currentIndexRef.current];
     const route = currentDiv?.getAttribute("data-route");
+    const id = currentDiv?.getAttribute("data-library-id");
+    setItem(id + "")
     navigateTo(route);
   };
 
@@ -57,7 +61,7 @@ const Shelf: React.FC = () => {
     }
   };
 
-  const getServerStatus = async () => {
+  const getLibrary = async () => {
     try {
       const data = await fetchLibrary();
       setLibrary(data);
@@ -73,7 +77,7 @@ const Shelf: React.FC = () => {
   };
 
   useEffect(() => {
-    getServerStatus();
+    getLibrary();
     window.addEventListener("keydown", handleKey);
     return () => {
       window.removeEventListener("keydown", handleKey); // Clean up
@@ -81,28 +85,60 @@ const Shelf: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    var selected_library_id = getItem()
+    if (selected_library_id)
+    {
+      for (let index = 0; index < divRefs.current.length; index++) {
+        const element = divRefs.current[index];
+        if (element)
+        {
+          const id = element?.getAttribute("data-library-id");
+          if (id == selected_library_id)
+          {
+            setCurrentIndex(index);
+            divRefs.current[index]?.focus()
+          }
+        }
+      }
+    }
+  }, [libraries]);
+
+  useEffect(() => {
     currentIndexRef.current = currentIndex;
   }, [currentIndex]);
 
   if (loading) {
-    return <p>Loading...</p>;
+    return <>
+      <div className="w-full h-screen min-w-[1280px] p-4 bg-zinc-900">
+        <div className="text-xl text-white font-bold mb-6 text-center">
+          Loading...
+        </div>
+      </div>
+    </>
   }
 
   if (error) {
-    return <p>Error: {error}</p>;
+    return <>
+      <div className="w-full h-screen min-w-[1280px] p-4 bg-zinc-900">
+        <div className="text-xl text-white font-bold mb-6 text-center">
+        Error: {error}
+        </div>
+      </div>
+    </>
   }
 
   return (
     <>
-      <div className="w-full h-screen p-4 bg-zinc-900">
-        <h1 className="text-3xl text-white font-bold mb-6 text-center">
-          Libraries
-        </h1>
+      <div className="w-full h-screen min-w-[1280px] p-4 bg-zinc-900">
+          <div className="text-xl text-white font-bold mb-1 text-center">
+            Libraries
+          </div>
   
         <div className="grid grid-cols-8 gap-4">
           {libraries.map((library, index) => (
             <div
               key={index}
+              data-library-id={library.id}
               data-route={"/library/" + library.id}
               ref={(el) => (divRefs.current[index] = el)}
               tabIndex={-1}
@@ -121,7 +157,6 @@ const Shelf: React.FC = () => {
               }`}
             >
               <h1 className="text-2xl text-center font-bold mt-12">{library.title}</h1>
-              <p className="text-sm text-gray-600 text-center mt-2">Test desc</p>
             </div>
           ))}
         </div>

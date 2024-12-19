@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { SeriesResponseInterface, fetchSeries } from "../services/Api";
+import { useLocalStorage } from "../services/useLocalStorage";
 
 interface LibraryParams {
   [id: string]: string | undefined;
@@ -15,6 +16,7 @@ const Library: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const currentIndexRef = useRef(currentIndex);
+  const { setItem, getItem } = useLocalStorage("selected_serie_id");
 
   const navigate = useNavigate();
   const navigateTo = (uri: string | null | undefined) => {
@@ -28,11 +30,11 @@ const Library: React.FC = () => {
           ? seriesSizeRef.current - 1
           : currentIndexRef.current + 1
         : currentIndexRef.current - 1 < 0
-        ? 0
-        : currentIndexRef.current - 1;
+          ? 0
+          : currentIndexRef.current - 1;
 
     setCurrentIndex(nextIndex);
-    divRefs.current[nextIndex]?.focus(); 
+    divRefs.current[nextIndex]?.focus();
   };
 
   const getSeries = async () => {
@@ -53,6 +55,8 @@ const Library: React.FC = () => {
   const enterDirectory = () => {
     const currentDiv = divRefs.current[currentIndexRef.current];
     const route = currentDiv?.getAttribute("data-route");
+    const id = currentDiv?.getAttribute("data-serie-id");
+    setItem(id + "")
     navigateTo(route);
   };
 
@@ -91,12 +95,40 @@ const Library: React.FC = () => {
     seriesSizeRef.current = series.length
   }, [currentIndex, series]);
 
+  useEffect(() => {
+    var selected_serie_id = getItem()
+    if (selected_serie_id) {
+      for (let index = 0; index < divRefs.current.length; index++) {
+        const element = divRefs.current[index];
+        if (element) {
+          const id = element?.getAttribute("data-serie-id");
+          if (id == selected_serie_id) {
+            setCurrentIndex(index);
+            divRefs.current[index]?.focus()
+          }
+        }
+      }
+    }
+  }, [series]);
+
   if (loading) {
-    return <p>Loading...</p>;
+    return <>
+      <div className="w-full h-screen p-4 bg-zinc-900">
+        <div className="text-xl text-white font-bold mb-6 text-center">
+          Loading...
+        </div>
+      </div>
+    </>
   }
 
   if (error) {
-    return <p>Error: {error}</p>;
+    return <>
+      <div className="w-full h-screen p-4 bg-zinc-900">
+        <div className="text-xl text-white font-bold mb-6 text-center">
+        Error: {error}
+        </div>
+      </div>
+    </>
   }
 
   return (
@@ -105,20 +137,20 @@ const Library: React.FC = () => {
         <div className="text-xl text-white font-bold mb-6 text-center">
           Series
         </div>
-  
+
         <div className="grid grid-cols-8 gap-4">
           {series.map((serie, index) => (
             <div>
               <div
                 key={index}
+                data-serie-id={serie.id}
                 data-route={`/series/${serie.id}`}
                 ref={(el) => (divRefs.current[index] = el)} // Assign ref
                 tabIndex={-1} // Make it focusable but not in tab order
-                className={`p-4 border rounded focus:outline-none ${
-                  currentIndex === index
+                className={`p-4 border rounded focus:outline-none ${currentIndex === index
                     ? "border-2 border-red-500 "
                     : "text-white"
-                }`}
+                  }`}
                 style={{
                   width: "150px",
                   height: "200px",
@@ -129,32 +161,28 @@ const Library: React.FC = () => {
               >
               </div>
               <div
-                className={`text-white truncate text-center min-w-[150px] pl-1 pr-1 ${
-                  serie.read === 100
+                className={`text-white truncate text-center min-w-[150px] pl-1 pr-1 ${serie.read === 100
                     ? "bg-green-700"
                     : serie.cached ? "bg-yellow-500" : ""
-                }
+                  }
                 
-                ${
-                  currentIndex === index
-                  ? "text-red-500"
-                  : "text-white"
-                }
+                ${currentIndex === index
+                    ? "text-red-500"
+                    : "text-white"
+                  }
                 `}
               >
                 {serie.title}
               </div>
               <div
-                className={`text-white truncate text-center text-sm min-w-[150px] pl-1 pr-1 ${
-                  serie.read === 100
+                className={`text-white truncate text-center text-sm min-w-[150px] pl-1 pr-1 ${serie.read === 100
                     ? "bg-green-700"
                     : serie.cached ? "bg-yellow-500" : ""
-                }
-                ${
-                  currentIndex === index
-                  ? "text-red-500"
-                  : "text-white"
-                }
+                  }
+                ${currentIndex === index
+                    ? "text-red-500"
+                    : "text-white"
+                  }
                 `}
               >
                 Read: {serie.read.toFixed(1)}%

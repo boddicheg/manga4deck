@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { VolumeResponseInterface, fetchCacheSeries, fetchVolumes, fetchReadVolume, fetchUnReadVolume } from "../services/Api";
+import { useLocalStorage } from "../services/useLocalStorage";
 
 interface SeriesParams {
   [id: string]: string | undefined;
@@ -15,8 +16,9 @@ const Series: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const currentIndexRef = useRef(currentIndex);
+  const { setItem, getItem } = useLocalStorage("selected_volume_id");
 
-  const fetchInterval = 1000;
+  // const fetchInterval = 1000;
 
   const navigate = useNavigate();
   const navigateTo = (uri: string | null | undefined) => {
@@ -55,6 +57,8 @@ const Series: React.FC = () => {
   const enterDirectory = () => {
     const currentDiv = divRefs.current[currentIndexRef.current];
     const route = currentDiv?.getAttribute("data-route");
+    const id = currentDiv?.getAttribute("data-volume-id");
+    setItem(id + "")
     navigateTo(route);
   };
 
@@ -106,10 +110,10 @@ const Series: React.FC = () => {
   useEffect(() => {
     getSeries();
     window.addEventListener("keydown", handleKey);
-    const intervalId = setInterval(getSeries, fetchInterval);
+    // const intervalId = setInterval(getSeries, fetchInterval);
     return () => {
       window.removeEventListener("keydown", handleKey);
-      clearInterval(intervalId);
+      // clearInterval(intervalId);
     };
   }, []);
 
@@ -118,17 +122,48 @@ const Series: React.FC = () => {
     volumesSizeRef.current = volumes.length
   }, [currentIndex, volumes]);
 
+  useEffect(() => {
+    var selected_volume_id = getItem()
+    if (selected_volume_id)
+    {
+      for (let index = 0; index < divRefs.current.length; index++) {
+        const element = divRefs.current[index];
+        if (element)
+        {
+          const id = element?.getAttribute("data-volume-id");
+          if (id == selected_volume_id)
+          {
+            setCurrentIndex(index);
+            divRefs.current[index]?.focus()
+          }
+        }
+      }
+    }
+  }, [volumes]);
+
   if (loading) {
-    return <p>Loading...</p>;
+    return <>
+      <div className="w-full h-screen min-w-[1280px] p-4 bg-zinc-900">
+        <div className="text-xl text-white font-bold mb-6 text-center">
+          Loading...
+        </div>
+      </div>
+    </>
   }
 
   if (error) {
-    return <p>Error: {error}</p>;
+    return <>
+      <div className="w-full h-screen min-w-[1280px] p-4 bg-zinc-900">
+        <div className="text-xl text-white font-bold mb-6 text-center">
+        Error: {error}
+        </div>
+      </div>
+    </>
   }
 
   return (
     <>
-      <div className="w-full h-screen p-4 bg-zinc-900">
+      <div className="w-full h-full h-screen p-4 bg-zinc-900">
         <div className="text-xl text-white font-bold mb-1 text-center">
           Volumes
         </div>
@@ -142,6 +177,7 @@ const Series: React.FC = () => {
               <div
                 key={volume.volume_id}
                 data-key={volume.volume_id}
+                data-volume-id={volume.volume_id}
                 data-pages={volume.pages}
                 data-read={volume.read}
                 data-route={`/viewer/${volume.series_id}/${volume.volume_id}/${volume.chapter_id}/${volume.pages}/${volume.read}`}
