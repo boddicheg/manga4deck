@@ -4,9 +4,9 @@
   "version": "0.3.4",
   "identifier": "com.manga4deck.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run prepare-backend && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run prepare-backend && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
