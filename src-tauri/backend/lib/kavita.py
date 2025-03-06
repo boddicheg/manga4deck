@@ -6,11 +6,15 @@ import sys
 import hashlib
 import threading
 import atexit
+import logging
 
 from lib.db import *
 
 import sys
 import pathlib
+
+# Create module logger
+logger = logging.getLogger(__name__)
 
 def get_datadir() -> pathlib.Path:
 
@@ -58,12 +62,48 @@ def get_cache_size(delimiter = 1024 * 1024 * 1024):
 
 class KavitaAPI():
     def __init__(self, ip, username, password, api_key):
-        self.ip = ip
-        self.url = f"http://{ip}/api/"
+        self.database = DBSession(DB_PATH)
+        
+        # Check if we have saved settings in the database
+        saved_ip = self.database.get_server_setting("server_ip")
+        saved_username = self.database.get_server_setting("username")
+        saved_password = self.database.get_server_setting("password")
+        
+        # Use saved settings if available, otherwise use provided values
+        self.ip = saved_ip if saved_ip else ip
+        self.username = saved_username if saved_username else username
+        self.password = saved_password if saved_password else password
+        
+        # Save settings to database if they're not already saved
+        if not saved_ip:
+            self.database.set_server_setting("server_ip", ip)
+        if not saved_username:
+            self.database.set_server_setting("username", username)
+        if not saved_password:
+            self.database.set_server_setting("password", password)
+        
+        # Add some initial logs to ensure we have something to display
+        logger.info(f"Using server IP: {self.ip}")
+        logger.info(f"Using username: {self.username}")
+        
+        # Parse the IP and port
+        if ':' in self.ip:
+            host, port = self.ip.split(':')
+            self.host = host
+            self.port = port
+            logger.info(f"Parsed host: {self.host}, port: {self.port}")
+            self.url = f"http://{self.host}:{self.port}/api/"
+        else:
+            self.host = self.ip
+            self.port = "5000"  # Default Kavita port
+            logger.info(f"Using default port 5000 for host: {self.host}")
+            self.url = f"http://{self.host}:{self.port}/api/"
+        
+        logger.info(f"Full API URL: {self.url}")
+        
         self.api_key = api_key
         self.offline_mode = False
         self.lock = threading.Lock()
-        self.database = DBSession(DB_PATH)
 
         if not os.path.exists(CACHE_FOLDER):
             os.mkdir(CACHE_FOLDER)
@@ -71,30 +111,37 @@ class KavitaAPI():
         atexit.register(self.destuctor)
 
         try:
+            logger.info(f"Attempting to connect to {self.url}")
             response = requests.post(
                 self.url + "Account/login", 
                 json={
-                    "username": username,
-                    "password": password,
+                    "username": self.username,
+                    "password": self.password,
                     "apiKey": api_key
-                }
+                },
+                timeout=10  # Add a timeout to prevent hanging
             )
             
+            logger.info(f"Response status code: {response.status_code}")
+            
             if len(response.content.decode()) == 0:
-                raise("[!] Authentification failed!")
+                raise Exception("[!] Authentication failed! Empty response")
             
             auth_data = json.loads(response.content)
+            # logger.info(f"Auth response: {auth_data}")
+            
             if "token" in auth_data:
                 self.token = auth_data["token"]
                 self.logged_as = auth_data["username"]
-                print(f"Logged as {self.logged_as}")
+                logger.info(f"Logged in as {self.logged_as}")
             else:
-                raise("[!] Authentification failed!")
-        except:
+                raise Exception("[!] Authentication failed! No token in response")
+        except Exception as e:
+            logger.error(f"Connection error: {str(e)}")
             self.offline_mode = True
             self.token = ""
             self.logged_as = ""
-            print("Now in offline mode")
+            logger.warning("Now in offline mode")
         # --
         self.caching_series_queue = []
         self.caching_callback = None
@@ -146,7 +193,7 @@ class KavitaAPI():
             cached_serie = self.caching_series_queue[0]
             del self.caching_series_queue[0]
             
-            print(f"Start caching serie {cached_serie['id']} ")
+            logger.info(f"Start caching serie {cached_serie['id']} ")
             serie = {
                 "id": cached_serie["id"],
                 "title": cached_serie["title"],
@@ -189,7 +236,7 @@ class KavitaAPI():
                 if self.caching_callback:
                     self.caching_callback(v["title"])
 
-            print(f"Finised caching serie")
+            logger.info(f"Finised caching serie")
 
     def cache_serie(self, serie, callback):
         with self.lock:
@@ -460,4 +507,107 @@ class KavitaAPI():
                     "Authorization": f"Bearer {self.token}"
                 }
             )
-        
+
+    def update_server_settings(self, new_ip=None, new_username=None, new_password=None):
+        """Update the server settings and try to reconnect"""
+        with self.lock:
+            # Save old values for rollback if needed
+            old_ip = self.ip
+            old_host = getattr(self, 'host', '')
+            old_port = getattr(self, 'port', '')
+            old_url = self.url
+            old_username = self.username
+            old_password = self.password
+            old_token = self.token
+            old_logged_as = self.logged_as
+            old_offline_mode = self.offline_mode
+            
+            # Terminate existing connection
+            logger.info(f"Terminating existing connection to {self.url}")
+            self.token = ""
+            self.logged_as = ""
+            self.offline_mode = True
+            
+            # Update values if provided
+            if new_ip:
+                logger.info(f"Updating server IP from {self.ip} to {new_ip}")
+                self.ip = new_ip
+                
+                # Parse the IP and port
+                if ':' in new_ip:
+                    host, port = new_ip.split(':')
+                    self.host = host
+                    self.port = port
+                    logger.info(f"Parsed host: {self.host}, port: {self.port}")
+                    self.url = f"http://{self.host}:{self.port}/api/"
+                else:
+                    self.host = new_ip
+                    self.port = "5000"  # Default Kavita port
+                    logger.info(f"Using default port 5000 for host: {self.host}")
+                    self.url = f"http://{self.host}:{self.port}/api/"
+                    
+                logger.info(f"New API URL: {self.url}")
+                self.database.set_server_setting("server_ip", new_ip)
+            
+            if new_username:
+                logger.info(f"Updating username from {self.username} to {new_username}")
+                self.username = new_username
+                self.database.set_server_setting("username", new_username)
+                
+            if new_password:
+                logger.info("Updating password")
+                self.password = new_password
+                self.database.set_server_setting("password", new_password)
+            
+            # Try to reconnect
+            try:
+                logger.info(f"Attempting to connect to {self.url}")
+                response = requests.post(
+                    self.url + "Account/login", 
+                    json={
+                        "username": self.username,
+                        "password": self.password,
+                        "apiKey": self.api_key
+                    },
+                    timeout=10  # Add a timeout to prevent hanging
+                )
+                
+                logger.info(f"Response status code: {response.status_code}")
+                
+                if response.status_code != 200:
+                    logger.error(f"Error response: {response.text}")
+                    raise Exception(f"Authentication failed! Status code: {response.status_code}")
+                
+                if len(response.content.decode()) == 0:
+                    raise Exception("Authentication failed! Empty response")
+                
+                auth_data = json.loads(response.content)
+                logger.info(f"Auth response: {auth_data}")
+                
+                if "token" in auth_data:
+                    self.token = auth_data["token"]
+                    self.logged_as = auth_data["username"]
+                    self.offline_mode = False
+                    logger.info(f"Reconnected as {self.logged_as}")
+                    
+                    # Clear any cached data to force refresh with new server
+                    logger.info(f"Clearing cached data to refresh with new server")
+                    self.caching_series_queue = []
+                    
+                    return True, "Connected successfully"
+                else:
+                    raise Exception("Authentication failed! No token in response")
+            except Exception as e:
+                error_msg = f"Failed to connect to server: {str(e)}"
+                logger.error(error_msg)
+                # Revert to old values if connection fails
+                self.ip = old_ip
+                self.host = old_host
+                self.port = old_port
+                self.url = old_url
+                self.username = old_username
+                self.password = old_password
+                self.token = old_token
+                self.logged_as = old_logged_as
+                self.offline_mode = old_offline_mode
+                return False, error_msg

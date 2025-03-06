@@ -121,3 +121,67 @@ export const fetchUnReadVolume = async (
   }
   return await response.json();
 };
+
+export interface ServerSettingsInterface {
+  ip: string;
+  username: string;
+  offline_mode: boolean;
+  logged_as: string;
+}
+
+export const fetchServerSettings = async (): Promise<ServerSettingsInterface> => {
+  const response = await fetch("http://localhost:11337/api/server-settings");
+  if (!response.ok) {
+    throw new Error("Network response was not ok");
+  }
+  return await response.json();
+};
+
+export interface UpdateServerSettingsInterface {
+  ip?: string;
+  username?: string;
+  password?: string;
+}
+
+export interface ServerSettingsResponseInterface {
+  status: string;
+  message: string;
+  current_settings?: {
+    ip: string;
+    username: string;
+    offline_mode: boolean;
+    logged_as: string;
+    url: string;
+  };
+}
+
+export const updateServerSettings = async (
+  settings: UpdateServerSettingsInterface
+): Promise<ServerSettingsResponseInterface> => {
+  console.log("Sending server settings update request:", { 
+    ...settings, 
+    password: settings.password ? "******" : undefined 
+  });
+  
+  try {
+    const response = await fetch("http://localhost:11337/api/server-settings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(settings),
+    });
+    
+    const data = await response.json();
+    console.log("Server settings update response:", data);
+    
+    if (!response.ok) {
+      throw new Error(data.message || "Failed to update server settings");
+    }
+    
+    return data;
+  } catch (error) {
+    console.error("Error in updateServerSettings:", error);
+    throw error;
+  }
+};

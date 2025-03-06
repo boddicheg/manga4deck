@@ -11,25 +11,52 @@ const Viewer: React.FC = () => {
   // Current page
   const [currentPage, setCurrentPage] = useState(+read!);
   const currentPageRef = useRef(currentPage);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
 
   const getCurrentPageImage = () => {
     return "http://localhost:11337/api/picture/" + series_id + "/" + volume_id + "/" + chapter_id + "/" + currentPageRef.current;
   };
 
   const changeImageSrc = () => {
+    setLoading(true);
+    setError(null);
+    
     document.getElementById("image-container")?.replaceChildren("");
     const img = new Image();
     img.src = getCurrentPageImage();
-    console.log(img.src)
+    console.log("Loading image:", img.src);
 
     img.onload = () => {
-      console.log("onload: ", img.width, "x", img.height)
+      console.log("Image loaded:", img.width, "x", img.height);
       document.getElementById("image-container")?.replaceChildren(img);
+      setLoading(false);
     };
 
     img.onerror = () => {
       console.error("Failed to load the image.");
+      setError("Failed to load image. The server might be offline or the image doesn't exist.");
+      setLoading(false);
+      
+      // Create error message element
+      const errorDiv = document.createElement("div");
+      errorDiv.className = "text-red-500 text-center p-4 bg-zinc-800 rounded";
+      errorDiv.textContent = "Failed to load image. The server might be offline or the image doesn't exist.";
+      document.getElementById("image-container")?.replaceChildren(errorDiv);
     };
+    
+    // Set a timeout to handle cases where the image request hangs
+    setTimeout(() => {
+      if (loading) {
+        setError("Image load timed out. The server might be unresponsive.");
+        setLoading(false);
+        
+        const errorDiv = document.createElement("div");
+        errorDiv.className = "text-yellow-500 text-center p-4 bg-zinc-800 rounded";
+        errorDiv.textContent = "Image load timed out. The server might be unresponsive.";
+        document.getElementById("image-container")?.replaceChildren(errorDiv);
+      }
+    }, 10000); // 10 second timeout
   };
 
   const cycleFocus = (direction: "next" | "prev") => {
@@ -52,11 +79,9 @@ const Viewer: React.FC = () => {
     switch (event.key) {
       case "ArrowLeft":
         cycleFocus("prev")
-        // changeImageSrc()
         break;
       case "ArrowRight":
         cycleFocus("next")
-        // changeImageSrc()
         break;
       case "Backspace":
         navigate(-1);
@@ -86,7 +111,29 @@ const Viewer: React.FC = () => {
         <div className="text-white mb-3 text-center">
           {currentPage} / {pages}
         </div>
+        {loading && (
+          <div className="text-white text-center mb-3">Loading image...</div>
+        )}
         <div id="image-container" className="mb-4 max-w-[800px]"></div>
+        {error && (
+          <div className="text-red-500 text-center mt-3">
+            Error: {error}
+            <div className="mt-2">
+              <button 
+                onClick={() => changeImageSrc()} 
+                className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
+              >
+                Retry
+              </button>
+              <button 
+                onClick={() => navigate(-1)} 
+                className="bg-gray-500 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded ml-2"
+              >
+                Go Back
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </>
   );

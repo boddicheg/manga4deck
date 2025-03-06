@@ -9,6 +9,12 @@ Base = declarative_base()
 
 # -----------------------------------------------------------------------------
 # Tables
+class ServerSettings(Base):
+    __tablename__ = 'server_settings'
+    id = Column(Integer, primary_key=True)
+    key = Column(String, nullable=False, unique=True)
+    value = Column(String, nullable=False)
+
 class Library(Base):
     __tablename__ = 'library'
     id = Column(Integer, primary_key=True)
@@ -61,7 +67,7 @@ class ReadProgress(Base):
     chapter_id = Column(Integer, nullable=False)
     page = Column(Integer, nullable=False)
     
-g_tables = [Library, Series, Volumes, MangaPictures, SerieCovers, VolumeCovers, ReadProgress]
+g_tables = [ServerSettings, Library, Series, Volumes, MangaPictures, SerieCovers, VolumeCovers, ReadProgress]
 # -----------------------------------------------------------------------------
 
 class DBSession:
@@ -75,6 +81,27 @@ class DBSession:
         
     def destuctor(self):
         self.session.close()
+
+# -----------------------------------------------------------------------------
+# Server Settings methods
+    def set_server_setting(self, key, value):
+        """Set a server setting by key"""
+        setting = self.session.query(ServerSettings).filter_by(key=key).first()
+        if setting:
+            setting.value = value
+        else:
+            self.session.add(ServerSettings(key=key, value=value))
+        self.commit_changes()
+    
+    def get_server_setting(self, key, default=None):
+        """Get a server setting by key, return default if not found"""
+        setting = self.session.query(ServerSettings).filter_by(key=key).first()
+        return setting.value if setting else default
+    
+    def get_all_server_settings(self):
+        """Get all server settings as a dictionary"""
+        settings = self.session.query(ServerSettings).all()
+        return {setting.key: setting.value for setting in settings}
 
 # -----------------------------------------------------------------------------
 # Library methods

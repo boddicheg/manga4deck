@@ -37,8 +37,8 @@ const Dashboard: React.FC = () => {
   const cycleFocus = (direction: "next" | "prev") => {
     const nextIndex =
       direction === "next"
-        ? currentIndexRef.current + 1 >= 5
-          ? 5 - 1
+        ? currentIndexRef.current + 1 >= divRefs.current.length
+          ? divRefs.current.length - 1
           : currentIndexRef.current + 1
         : currentIndexRef.current - 1 < 0
           ? 0
@@ -222,8 +222,8 @@ const Dashboard: React.FC = () => {
 
         <div
           key={3}
-          data-route={"/exit"}
-          onClick={() => navigateTo("/")}
+          data-route={"/settings"}
+          onClick={() => navigateTo("/settings")}
           ref={(el) => (divRefs.current[3] = el)} // Assign ref
           tabIndex={-1} // Make it focusable but not in tab order
           className={`
@@ -235,6 +235,28 @@ const Dashboard: React.FC = () => {
             m-3
             inline-block
             ${currentIndex === 3
+              ? "border-2 border-red-500"
+              : "border-gray-300"
+            }`}
+        >
+          <div className="text-lg text-center font-bold mt-12">Settings</div>
+          <div className="text-sm text-gray-600 text-center">Configure connection</div>
+        </div>
+
+        <div
+          key={4}
+          data-route={"/exit-app"}
+          ref={(el) => (divRefs.current[4] = el)} // Assign ref
+          tabIndex={-1} // Make it focusable but not in tab order
+          className={`
+            border-2 
+            rounded 
+            bg-gray-300
+            min-h-[200px]
+            min-w-[150px]
+            m-3
+            inline-block
+            ${currentIndex === 4
               ? "border-2 border-red-500"
               : "border-gray-300"
             }`}
