@@ -12,7 +12,7 @@ const App: React.FC = () => {
   return (
     <>
       <HashRouter>
-        <div className="w-max h-max max-w-full max-h-full">
+        <div className="w-full h-full">
           <ScrollToTop />
           <Routes>
             <Route path="/" element={<Dashboard />} />
@@ -20,7 +20,7 @@ const App: React.FC = () => {
             <Route path="/library/:id" element={<Library />} />
             <Route path="/series/:id" element={<Series />} />
             <Route path="/viewer/:series_id/:volume_id/:chapter_id/:pages/:read" element={<Viewer />} />
-            <Route path="/server-settings" element={<ServerSettings />} />
+            <Route path="/settings" element={<ServerSettings />} />
           </Routes>
         </div>
       </HashRouter>
