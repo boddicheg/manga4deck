@@ -7,10 +7,11 @@ import Series from "./components/Series.tsx";
 import Viewer from "./components/Viewer.tsx";
 import ScrollToTop from "./components/ScrollToTop.tsx";
 import ServerSettings from "./components/ServerSettings.tsx";
+import { ToastProvider } from "./components/ToastContainer.tsx";
 
 const App: React.FC = () => {
   return (
-    <>
+    <ToastProvider>
       <HashRouter>
         <div className="w-full h-full">
           <ScrollToTop />
@@ -24,7 +25,7 @@ const App: React.FC = () => {
           </Routes>
         </div>
       </HashRouter>
-    </>
+    </ToastProvider>
   );
 };
 

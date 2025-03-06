@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { fetchServerSettings, updateServerSettings } from "../services/Api";
 import LogViewer from "./LogViewer";
+import { useToast } from "./ToastContainer";
 
 const ServerSettings: React.FC = () => {
   const [serverIP, setServerIP] = useState<string>("");
@@ -11,10 +12,9 @@ const ServerSettings: React.FC = () => {
   const [apiKey, setApiKey] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   const [showLogs, setShowLogs] = useState<boolean>(false);
   const navigate = useNavigate();
+  const { showToast } = useToast();
 
   useEffect(() => {
     const getServerSettings = async () => {
@@ -34,12 +34,11 @@ const ServerSettings: React.FC = () => {
           setApiKey(data.api_key);
         }
         
-        setError(null);
       } catch (err) {
         if (err instanceof Error) {
-          setError(err.message);
+          showToast(err.message, 'error');
         } else {
-          setError("An unexpected error occurred");
+          showToast("An unexpected error occurred", 'error');
         }
       } finally {
         setLoading(false);
@@ -47,15 +46,13 @@ const ServerSettings: React.FC = () => {
     };
 
     getServerSettings();
-  }, []);
+  }, [showToast]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     try {
       setSaving(true);
-      setError(null);
-      setSuccess(null);
       
       // Validate IP format
       if (serverIP) {
@@ -63,7 +60,7 @@ const ServerSettings: React.FC = () => {
           const [host, port] = serverIP.split(':');
           const portNum = parseInt(port);
           if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
-            setError("Invalid port number. Must be between 1 and 65535");
+            showToast("Invalid port number. Must be between 1 and 65535", 'error');
             setSaving(false);
             return;
           }
@@ -91,7 +88,7 @@ const ServerSettings: React.FC = () => {
       });
       
       // Show connecting message
-      setSuccess("Terminating current connection and connecting to Kavita server...");
+      showToast("Connecting to Kavita server...", 'info');
       
       const result = await updateServerSettings(settings);
       console.log("Kavita settings update result:", result);
@@ -114,16 +111,16 @@ const ServerSettings: React.FC = () => {
         console.log("Updated settings from response:", result.current_settings);
       }
       
-      setSuccess(result.message || "Kavita settings updated successfully");
+      showToast(result.message || "Kavita settings updated successfully", 'success');
       
       // Clear password field after successful update
       setPassword("");
     } catch (err) {
       console.error("Error updating Kavita settings:", err);
       if (err instanceof Error) {
-        setError(err.message);
+        showToast(err.message, 'error');
       } else {
-        setError("An unexpected error occurred");
+        showToast("An unexpected error occurred", 'error');
       }
     } finally {
       setSaving(false);
@@ -151,18 +148,6 @@ const ServerSettings: React.FC = () => {
         <div className="text-center text-xl">Loading settings...</div>
       ) : (
         <form onSubmit={handleSubmit} className="w-full">
-          {error && (
-            <div className="bg-red-500 text-white p-4 mb-6 rounded">
-              Error: {error}
-            </div>
-          )}
-          
-          {success && (
-            <div className="bg-green-500 text-white p-4 mb-6 rounded">
-              {success}
-            </div>
-          )}
-          
           <div className="mb-6">
             <label className="block mb-2 text-xl">Kavita Server URL:</label>
             <input

@@ -2,9 +2,10 @@ import React, { useEffect, useState, useRef } from "react";
 import { fetchClearCache, fetchServerStatus, fetchUpdateLibrary } from "../services/Api";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { useToast } from "./ToastContainer";
 
 const Dashboard: React.FC = () => {
-
+  const { showToast } = useToast();
   const [serverStatus, setServerStatus] = useState<boolean>(false);
   const [logged, setLogged] = useState<string>("");
   const [serverIP, setServerIP] = useState<string>("");
@@ -17,16 +18,47 @@ const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const fetchInterval = 5000; // Fetch every 5 seconds
 
+  // Function to show different types of toasts for demonstration
+  const showDemoToasts = () => {
+    // Welcome toast
+    showToast("Welcome to Manga4Deck!", "info");
+    
+    // Show different toast types with a delay between them
+    setTimeout(() => {
+      showToast("Connected to Kavita server", "success");
+    }, 1000);
+    
+    setTimeout(() => {
+      showToast("Use arrow keys to navigate", "info");
+    }, 2000);
+    
+    // Add a warning toast with a delay
+    setTimeout(() => {
+      showToast("Cache size is large (24.03 GB)", "warning");
+    }, 3000);
+  };
+
   async function exitApp() {
     await invoke("exit_app", {});
   }
 
   const updateLib = async () => {
-    await fetchUpdateLibrary();
+    try {
+      await fetchUpdateLibrary();
+      showToast("Library update initiated", "success");
+    } catch (error) {
+      showToast("Failed to update library", "error");
+    }
   }
 
   const cleanCache = async () => {
-    await fetchClearCache();
+    try {
+      await fetchClearCache();
+      showToast("Cache cleared successfully", "success");
+      getServerStatus();
+    } catch (error) {
+      showToast("Failed to clear cache", "error");
+    }
   }
 
   const navigateTo = (uri: string | null | undefined) => {
@@ -53,6 +85,7 @@ const Dashboard: React.FC = () => {
     const route = currentDiv?.getAttribute("data-route");
     console.log(route);
     const exit_ = async () => {
+      showToast("Exiting application...", "info");
       await exitApp();
     };
     const cleanCache_ = async () => {
@@ -61,7 +94,6 @@ const Dashboard: React.FC = () => {
     };
     const updateLib_ = async () => {
       await updateLib();
-      
     };
     if (route == "/exit-app") exit_();
     else if (route == "/clean-cache") cleanCache_();
@@ -116,14 +148,21 @@ const Dashboard: React.FC = () => {
       setCacheSize(0.0)
       if (err instanceof Error) {
         setError(err.message);
+        showToast(`Connection error: ${err.message}`, "error");
       } else {
         setError("An unexpected error occurred");
+        showToast("An unexpected error occurred", "error");
       }
     }
   };
 
   useEffect(() => {
     getServerStatus();
+    
+    // Show demo toasts when component mounts - only show once
+    // Commenting this out as it's causing duplicate toasts
+    // showDemoToasts();
+    
     // Key press events
     window.addEventListener("keydown", handleKey);
     const intervalId = setInterval(getServerStatus, fetchInterval);
@@ -195,7 +234,7 @@ const Dashboard: React.FC = () => {
             }`}
         >
           <div className="text-lg text-center font-bold mt-12">Clean Cache</div>
-          <div className="text-sm text-gray-600 text-center">{cacheSize.toFixed(2)}Gb</div>
+          <div className="text-sm text-gray-600 text-center">{cacheSize.toFixed(2)}Mb</div>
         </div>
 
         <div
