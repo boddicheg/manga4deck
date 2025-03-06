@@ -127,6 +127,8 @@ export interface ServerSettingsInterface {
   username: string;
   offline_mode: boolean;
   logged_as: string;
+  api_key?: string;
+  has_password?: boolean;
 }
 
 export const fetchServerSettings = async (): Promise<ServerSettingsInterface> => {
@@ -141,6 +143,7 @@ export interface UpdateServerSettingsInterface {
   ip?: string;
   username?: string;
   password?: string;
+  api_key?: string;
 }
 
 export interface ServerSettingsResponseInterface {
@@ -152,6 +155,8 @@ export interface ServerSettingsResponseInterface {
     offline_mode: boolean;
     logged_as: string;
     url: string;
+    api_key?: string;
+    has_password?: boolean;
   };
 }
 

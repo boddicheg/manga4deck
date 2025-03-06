@@ -7,6 +7,8 @@ const ServerSettings: React.FC = () => {
   const [serverIP, setServerIP] = useState<string>("");
   const [username, setUsername] = useState<string>("");
   const [password, setPassword] = useState<string>("");
+  const [hasStoredPassword, setHasStoredPassword] = useState<boolean>(false);
+  const [apiKey, setApiKey] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,6 +23,17 @@ const ServerSettings: React.FC = () => {
         const data = await fetchServerSettings();
         setServerIP(data.ip);
         setUsername(data.username);
+        
+        // Set the hasStoredPassword flag if the server has a password stored
+        if (data.has_password) {
+          setHasStoredPassword(data.has_password);
+        }
+        
+        // Set the API key if it exists
+        if (data.api_key) {
+          setApiKey(data.api_key);
+        }
+        
         setError(null);
       } catch (err) {
         if (err instanceof Error) {
@@ -58,36 +71,55 @@ const ServerSettings: React.FC = () => {
       }
       
       // Only send fields that have been changed
-      const settings: { ip?: string; username?: string; password?: string } = {};
+      const settings: { ip?: string; username?: string; password?: string; api_key?: string } = {};
       
       // Always send the IP address, even if it hasn't changed
       settings.ip = serverIP;
       
-      // Only send username and password if they're not empty
+      // Only send username if it's not empty
       if (username) settings.username = username;
+      
+      // Only send password if it's not empty (user entered a new one)
       if (password) settings.password = password;
       
-      console.log("Submitting server settings:", { ...settings, password: password ? "******" : undefined });
+      // Always send API key if it exists
+      if (apiKey) settings.api_key = apiKey;
+      
+      console.log("Submitting Kavita settings:", { 
+        ...settings, 
+        password: password ? "******" : undefined 
+      });
       
       // Show connecting message
-      setSuccess("Terminating current connection and connecting to new server...");
+      setSuccess("Terminating current connection and connecting to Kavita server...");
       
       const result = await updateServerSettings(settings);
-      console.log("Server settings update result:", result);
+      console.log("Kavita settings update result:", result);
       
       // If the response includes current settings, update the UI
       if (result.current_settings) {
         setServerIP(result.current_settings.ip);
         setUsername(result.current_settings.username);
+        
+        // Update the hasStoredPassword flag
+        if (result.current_settings.has_password !== undefined) {
+          setHasStoredPassword(result.current_settings.has_password);
+        }
+        
+        // Update the API key
+        if (result.current_settings.api_key) {
+          setApiKey(result.current_settings.api_key);
+        }
+        
         console.log("Updated settings from response:", result.current_settings);
       }
       
-      setSuccess(result.message || "Settings updated successfully");
+      setSuccess(result.message || "Kavita settings updated successfully");
       
       // Clear password field after successful update
       setPassword("");
     } catch (err) {
-      console.error("Error updating server settings:", err);
+      console.error("Error updating Kavita settings:", err);
       if (err instanceof Error) {
         setError(err.message);
       } else {
@@ -132,7 +164,7 @@ const ServerSettings: React.FC = () => {
           )}
           
           <div className="mb-6">
-            <label className="block mb-2 text-xl">Server IP Address:</label>
+            <label className="block mb-2 text-xl">Kavita Server URL:</label>
             <input
               type="text"
               value={serverIP}
@@ -140,27 +172,44 @@ const ServerSettings: React.FC = () => {
               className="w-full p-4 bg-zinc-800 border border-zinc-700 rounded text-white text-lg"
               placeholder="e.g. 192.168.1.100:5001"
             />
+            <p className="text-gray-400 mt-1 text-sm">The URL of your Kavita server, including port number</p>
           </div>
           
           <div className="mb-6">
-            <label className="block mb-2 text-xl">Username:</label>
+            <label className="block mb-2 text-xl">Kavita Username:</label>
             <input
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               className="w-full p-4 bg-zinc-800 border border-zinc-700 rounded text-white text-lg"
+              placeholder="Your Kavita username"
             />
           </div>
           
-          <div className="mb-8">
-            <label className="block mb-2 text-xl">Password:</label>
+          <div className="mb-6">
+            <label className="block mb-2 text-xl">Kavita Password:</label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full p-4 bg-zinc-800 border border-zinc-700 rounded text-white text-lg"
-              placeholder="Leave empty to keep current password"
+              placeholder={hasStoredPassword ? "Leave empty to keep current password" : "Enter your Kavita password"}
             />
+            {hasStoredPassword && (
+              <p className="text-gray-400 mt-1 text-sm">Password is stored. Leave empty to keep current password.</p>
+            )}
+          </div>
+          
+          <div className="mb-8">
+            <label className="block mb-2 text-xl">Kavita API Key:</label>
+            <input
+              type="text"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              className="w-full p-4 bg-zinc-800 border border-zinc-700 rounded text-white text-lg"
+              placeholder="Enter your Kavita API key"
+            />
+            <p className="text-gray-400 mt-1 text-sm">API key can be found in your Kavita user settings</p>
           </div>
           
           <div className="flex justify-between mb-8">

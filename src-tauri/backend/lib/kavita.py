@@ -68,11 +68,13 @@ class KavitaAPI():
         saved_ip = self.database.get_server_setting("server_ip")
         saved_username = self.database.get_server_setting("username")
         saved_password = self.database.get_server_setting("password")
+        saved_api_key = self.database.get_server_setting("api_key")
         
         # Use saved settings if available, otherwise use provided values
         self.ip = saved_ip if saved_ip else ip
         self.username = saved_username if saved_username else username
         self.password = saved_password if saved_password else password
+        self.api_key = saved_api_key if saved_api_key else api_key
         
         # Save settings to database if they're not already saved
         if not saved_ip:
@@ -81,10 +83,13 @@ class KavitaAPI():
             self.database.set_server_setting("username", username)
         if not saved_password:
             self.database.set_server_setting("password", password)
+        if not saved_api_key and api_key:
+            self.database.set_server_setting("api_key", api_key)
         
         # Add some initial logs to ensure we have something to display
         logger.info(f"Using server IP: {self.ip}")
         logger.info(f"Using username: {self.username}")
+        logger.info(f"API Key: {'Set' if self.api_key else 'Not set'}")
         
         # Parse the IP and port
         if ':' in self.ip:
@@ -101,7 +106,6 @@ class KavitaAPI():
         
         logger.info(f"Full API URL: {self.url}")
         
-        self.api_key = api_key
         self.offline_mode = False
         self.lock = threading.Lock()
 
@@ -117,7 +121,7 @@ class KavitaAPI():
                 json={
                     "username": self.username,
                     "password": self.password,
-                    "apiKey": api_key
+                    "apiKey": self.api_key
                 },
                 timeout=10  # Add a timeout to prevent hanging
             )
@@ -508,7 +512,7 @@ class KavitaAPI():
                 }
             )
 
-    def update_server_settings(self, new_ip=None, new_username=None, new_password=None):
+    def update_server_settings(self, new_ip=None, new_username=None, new_password=None, new_api_key=None):
         """Update the server settings and try to reconnect"""
         with self.lock:
             # Save old values for rollback if needed
@@ -518,6 +522,7 @@ class KavitaAPI():
             old_url = self.url
             old_username = self.username
             old_password = self.password
+            old_api_key = self.api_key
             old_token = self.token
             old_logged_as = self.logged_as
             old_offline_mode = self.offline_mode
@@ -558,6 +563,11 @@ class KavitaAPI():
                 logger.info("Updating password")
                 self.password = new_password
                 self.database.set_server_setting("password", new_password)
+            
+            if new_api_key:
+                logger.info("Updating API key")
+                self.api_key = new_api_key
+                self.database.set_server_setting("api_key", new_api_key)
             
             # Try to reconnect
             try:
@@ -607,6 +617,7 @@ class KavitaAPI():
                 self.url = old_url
                 self.username = old_username
                 self.password = old_password
+                self.api_key = old_api_key
                 self.token = old_token
                 self.logged_as = old_logged_as
                 self.offline_mode = old_offline_mode

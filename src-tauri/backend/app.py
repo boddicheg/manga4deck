@@ -43,14 +43,13 @@ logger = logging.getLogger(__name__)
 # Log startup message
 logger.info("Backend server starting")
 
-# Default IP address (will be overridden by database settings if available)
-DEFAULT_IP = "192.168.5.75:5002"
+# Default values - empty by default, will be populated from database if available
+DEFAULT_IP = "localhost:5000"
+username = ""
+password = ""
+api_key = ""
 
 g_root = os.path.dirname(os.path.abspath(__file__))
-
-username = "boddicheg"
-password = "dyd6ZNU.aby*mqd6fwd"
-api_key = "8df0fde8-8229-464c-ae0c-fd58a1a35b11"
 
 # Add function to get cache size
 def get_cache_size():
@@ -74,13 +73,13 @@ try:
     
     # Use saved IP if available, otherwise use default
     current_ip = saved_ip if saved_ip else DEFAULT_IP
-    logger.info(f"Using IP address: {current_ip} (from {'database' if saved_ip else 'default'})")
+    logger.info(f"Using Kavita server URL: {current_ip} (from {'database' if saved_ip else 'default'})")
     
     # Initialize KavitaAPI with the current IP
     kavita = KavitaAPI(current_ip, username, password, api_key)
-    logger.info("KavitaAPI initialized")
+    logger.info("Kavita API initialized")
 except Exception as e:
-    logger.error(f"Error initializing KavitaAPI: {e}")
+    logger.error(f"Error initializing Kavita API: {e}")
     sys.exit(1)
 
 CORS(app)
@@ -96,7 +95,7 @@ def status():
         return jsonify(status=not is_offline, ip=ip, logged_as=logged, cache=cache_size)
     except Exception as e:
         logger.error(f"Error in status route: {e}")
-        return jsonify(status=False, ip=DEFAULT_IP, logged_as="", cache=0, error=str(e))
+        return jsonify(status=False, ip=kavita.ip, logged_as="", cache=0, error=str(e))
 
 @app.route('/api/library')
 def library():
@@ -173,26 +172,33 @@ def unread_volume(series_id, volume_id):
 @app.route('/api/server-settings', methods=['GET'])
 def get_server_settings():
     """Get the current server settings"""
-    logger.info("GET /api/server-settings - Retrieving server settings")
+    logger.info("GET /api/server-settings - Retrieving Kavita settings")
+    
+    # Get password from database but mask it for security
+    has_password = kavita.password is not None and kavita.password != ""
+    
     settings = {
         "ip": kavita.ip,
         "username": kavita.username,
         "offline_mode": kavita.offline_mode,
-        "logged_as": kavita.logged_as
+        "logged_as": kavita.logged_as,
+        "api_key": kavita.api_key,
+        "has_password": has_password  # Send a flag indicating if password exists
     }
-    logger.info(f"Current server settings: IP={settings['ip']}, Username={settings['username']}, Offline={settings['offline_mode']}, LoggedAs={settings['logged_as']}")
+    logger.info(f"Current Kavita settings: URL={settings['ip']}, Username={settings['username']}, Offline={settings['offline_mode']}, LoggedAs={settings['logged_as']}, API Key={'Set' if settings['api_key'] else 'Not set'}, Password={'Set' if has_password else 'Not set'}")
     return jsonify(settings)
 
 @app.route('/api/server-settings', methods=['POST'])
 def update_server_settings():
     """Update the server settings"""
     data = request.json
-    logger.info(f"POST /api/server-settings - Received update request: {data}")
+    logger.info(f"POST /api/server-settings - Received Kavita settings update request")
     
     # Get the values from the request
     new_ip = data.get('ip')
     new_username = data.get('username')
     new_password = data.get('password')
+    new_api_key = data.get('api_key')
     
     # Validate the IP format
     if new_ip:
@@ -205,20 +211,21 @@ def update_server_settings():
             except ValueError:
                 return jsonify(status="error", message="Invalid port format. Must be a number"), 400
     
-    logger.info(f"Updating server settings - IP: {new_ip}, Username: {new_username}, Password: {'*****' if new_password else 'not changed'}")
+    logger.info(f"Updating Kavita settings - URL: {new_ip}, Username: {new_username}, Password: {'*****' if new_password else 'not changed'}, API Key: {'*****' if new_api_key else 'not changed'}")
     
     # Get current connection status before update
     old_status = not kavita.get_offline_mode()
     old_ip = kavita.get_kavita_ip()
     old_logged_as = kavita.logged_as
     
-    logger.info(f"Current connection status before update - Connected: {old_status}, IP: {old_ip}, LoggedAs: {old_logged_as}")
+    logger.info(f"Current Kavita connection status before update - Connected: {old_status}, URL: {old_ip}, LoggedAs: {old_logged_as}")
     
     # Update the settings
     success, message = kavita.update_server_settings(
         new_ip=new_ip, 
         new_username=new_username, 
-        new_password=new_password
+        new_password=new_password,
+        new_api_key=new_api_key
     )
     
     # Get the current settings after update attempt
@@ -227,12 +234,14 @@ def update_server_settings():
         "username": kavita.username,
         "offline_mode": kavita.offline_mode,
         "logged_as": kavita.logged_as,
-        "url": kavita.url
+        "url": kavita.url,
+        "api_key": kavita.api_key,
+        "has_password": kavita.password is not None and kavita.password != ""
     }
     
-    logger.info(f"Update result: {success}, {message}")
-    logger.info(f"Current connection status after update - Connected: {not kavita.offline_mode}, IP: {kavita.ip}, LoggedAs: {kavita.logged_as}")
-    logger.info(f"Current server settings after update: {current_settings}")
+    logger.info(f"Kavita settings update result: {success}, {message}")
+    logger.info(f"Current Kavita connection status after update - Connected: {not kavita.offline_mode}, URL: {kavita.ip}, LoggedAs: {kavita.logged_as}")
+    logger.info(f"Current Kavita settings after update: URL={current_settings['ip']}, Username={current_settings['username']}, Offline={current_settings['offline_mode']}, LoggedAs={current_settings['logged_as']}, API Key={'Set' if current_settings['api_key'] else 'Not set'}, Password={'Set' if current_settings['has_password'] else 'Not set'}")
     
     if success:
         return jsonify(status="success", message=message, current_settings=current_settings)
