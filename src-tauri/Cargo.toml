@@ -1,6 +1,6 @@
 [package]
 name = "manga4deck"
-version = "0.4.0"
+version = "0.4.1"
 description = "Manga reader for Kavita on Steam Deck"
 authors = ["boddicheg"]
 edition = "2021"
