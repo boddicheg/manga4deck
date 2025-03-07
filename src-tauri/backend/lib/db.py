@@ -306,5 +306,7 @@ class DBSession:
                 
     def clean(self):
         for t in g_tables:
+            if t.__tablename__ == "server_settings":
+                continue
             self.session.query(t).delete()
         self.commit_changes()
