@@ -56,10 +56,7 @@ const Library: React.FC = () => {
     navigateTo(route);
   };
 
-  const handleKey: (this: Window, ev: KeyboardEvent) => any = function (
-    this: Window,
-    event: KeyboardEvent
-  ) {
+  const handleKey = (event: KeyboardEvent): void => {
     switch (event.key) {
       case "ArrowLeft":
         cycleFocus("prev");

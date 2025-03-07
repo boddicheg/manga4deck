@@ -77,26 +77,27 @@ const Series: React.FC = () => {
         break;
       case "F1":
         // F1 - mark volume as completed
-        const readVolume = async (series_id: string | undefined, volume_id: string | undefined) => {
-          await fetchReadVolume(series_id, volume_id);
+        const readVolume = async (series_id: string | undefined, volume_id: string) => {
+          if (series_id) await fetchReadVolume(series_id, volume_id);
         }
-        const unreadVolume = async (series_id: string | undefined, volume_id: string | undefined) => {
-          await fetchUnReadVolume(series_id, volume_id);
+        const unreadVolume = async (series_id: string | undefined, volume_id: string) => {
+          if (series_id) await fetchUnReadVolume(series_id, volume_id);
         }
-        var current_volume = divRefs.current[currentIndexRef.current]?.getAttribute("data-key")
-        var pages = divRefs.current[currentIndexRef.current]?.getAttribute("data-pages")
-        var read = divRefs.current[currentIndexRef.current]?.getAttribute("data-read")
-        if (pages == read)
-          unreadVolume(id, current_volume + "")
-        else
-          readVolume(id, current_volume + "")
+        const current_volume = divRefs.current[currentIndexRef.current]?.getAttribute("data-key") || "";
+        const pages = Number(divRefs.current[currentIndexRef.current]?.getAttribute("data-pages") || "0");
+        const read = Number(divRefs.current[currentIndexRef.current]?.getAttribute("data-read") || "0");
+        if (pages === read) {
+          unreadVolume(id, current_volume);
+        } else {
+          readVolume(id, current_volume);
+        }
         break;
       case "F2":
         // F2 - cache whole serie
         const startCaching = async (id: string | undefined) => {
-          await fetchCacheSeries(id);
+          if (id) await fetchCacheSeries(id);
         }
-        startCaching(id)
+        startCaching(id);
         break;
       default:
         console.log(`Key pressed: ${event.key}`);

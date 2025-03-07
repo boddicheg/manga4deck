@@ -57,7 +57,7 @@ const ServerSettings: React.FC = () => {
       // Validate IP format
       if (serverIP) {
         if (serverIP.includes(':')) {
-          const [host, port] = serverIP.split(':');
+          const [_, port] = serverIP.split(':');
           const portNum = parseInt(port);
           if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
             showToast("Invalid port number. Must be between 1 and 65535", 'error');

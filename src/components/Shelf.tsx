@@ -66,10 +66,7 @@ const Shelf: React.FC = () => {
     navigateTo(route);
   };
 
-  const handleKey: (this: Window, ev: KeyboardEvent) => any = function (
-    this: Window,
-    event: KeyboardEvent
-  ) {
+  const handleKey = (event: KeyboardEvent): void => {
     switch (event.key) {
       case "ArrowLeft":
         cycleFocus("prev");
@@ -99,12 +96,12 @@ const Shelf: React.FC = () => {
         if (library.title.toLowerCase().includes('book')) {
           const thumbnail = await randomBookThumbnail(library.id);
           if (thumbnail) {
-            newThumbnails[library.id] = thumbnail;
+            newThumbnails[library.id.toString()] = thumbnail;
           }
         } else if (library.title.toLowerCase().includes('manga')) {
           const thumbnail = await randomMangaThumbnail(library.id);
           if (thumbnail) {
-            newThumbnails[library.id] = thumbnail;
+            newThumbnails[library.id.toString()] = thumbnail;
           }
         }
       }
@@ -226,10 +223,10 @@ const Shelf: React.FC = () => {
                 style={{
                   width: "150px",
                   height: "200px",
-                  backgroundImage: `url(${thumbnails[library.id] || ''})`,
+                  backgroundImage: `url(${thumbnails[library.id.toString()] || ''})`,
                   backgroundSize: 'cover',
                   backgroundPosition: 'center',
-                  backgroundColor: thumbnails[library.id] ? 'transparent' : '#4A4A4A',
+                  backgroundColor: thumbnails[library.id.toString()] ? 'transparent' : '#4A4A4A',
                   overflow: 'hidden',
                   boxShadow: currentIndex === index
                     ? "8px -8px 12px rgba(0,0,0,0.4), 3px -3px 6px rgba(0,0,0,0.3), inset 0 0 0 1px rgba(255,255,255,0.1)"

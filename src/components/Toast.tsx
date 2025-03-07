@@ -13,7 +13,6 @@ export interface ToastProps {
 const Toast: React.FC<ToastProps> = ({
   message,
   type,
-  duration = 3000,
   onClose,
   isVisible
 }) => {
@@ -23,33 +22,16 @@ const Toast: React.FC<ToastProps> = ({
   // Handle the animation and visibility states
   useEffect(() => {
     if (isVisible) {
-      setShouldRender(true);
       // Small delay to ensure the DOM is updated before starting the animation
       setTimeout(() => setVisible(true), 10);
+      setShouldRender(true);
     } else {
-      setVisible(false);
       // Wait for the animation to complete before removing from DOM
+      setVisible(false);
       const timer = setTimeout(() => setShouldRender(false), 300);
       return () => clearTimeout(timer);
     }
   }, [isVisible]);
-
-  // Handle the auto-close timer - only needed if we want the component to self-close
-  // This is now handled by the ToastContainer
-  // useEffect(() => {
-  //   // Only set the timer if the toast is visible and duration is positive
-  //   if (isVisible && duration > 0) {
-  //     const timer = setTimeout(() => {
-  //       if (onClose) {
-  //         onClose();
-  //       }
-  //     }, duration);
-      
-  //     // Clean up the timer when the component unmounts or dependencies change
-  //     return () => clearTimeout(timer);
-  //   }
-  // // Include all dependencies used inside the effect
-  // }, [duration, isVisible, onClose]);
 
   if (!shouldRender) return null;
 
@@ -109,11 +91,14 @@ const Toast: React.FC<ToastProps> = ({
     }
   };
 
+  // Handle the close button click
   const handleClose = () => {
-    setVisible(false);
     // Wait for the animation to complete before calling onClose
+    setVisible(false);
     setTimeout(() => {
-      if (onClose) onClose();
+      if (onClose) {
+        onClose();
+      }
     }, 300);
   };
 
