@@ -19,24 +19,15 @@ const Dashboard: React.FC = () => {
   const fetchInterval = 5000; // Fetch every 5 seconds
 
   // Function to show different types of toasts for demonstration
-  const showDemoToasts = () => {
-    // Welcome toast
-    showToast("Welcome to Manga4Deck!", "info");
+  // const showDemoToasts = () => {
+  //   // Welcome toast
+  //   showToast("Welcome to Manga4Deck!", "info");
     
-    // Show different toast types with a delay between them
-    setTimeout(() => {
-      showToast("Connected to Kavita server", "success");
-    }, 1000);
-    
-    setTimeout(() => {
-      showToast("Use arrow keys to navigate", "info");
-    }, 2000);
-    
-    // Add a warning toast with a delay
-    setTimeout(() => {
-      showToast("Cache size is large (24.03 GB)", "warning");
-    }, 3000);
-  };
+  //   // Show different toast types with a delay between them
+  //   setTimeout(() => {
+  //     showToast("Connected to Kavita server", "success");
+  //   }, 1000);
+  // };
 
   async function exitApp() {
     await invoke("exit_app", {});
