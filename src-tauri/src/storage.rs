@@ -1,11 +1,17 @@
 use rusqlite::{Connection, Result};
+use std::sync::{Arc, Mutex};
 
 use crate::logger::{
     info
 };
 
+use crate::kavita::{
+    Library
+};
+
+#[derive(Clone)]
 pub struct Database {
-    conn: Connection,
+    conn: Arc<Mutex<Connection>>,
 }
 
 impl Database {
@@ -17,22 +23,27 @@ impl Database {
             "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY, key TEXT, value TEXT)",
             [],
         )?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS libraries (id TEXT PRIMARY KEY, title TEXT)",
+            [],
+        )?;
 
-        Ok(Database { conn })
+        Ok(Database { conn: Arc::new(Mutex::new(conn)) })
     }   
 
     pub fn insert_setting(&self, key: &str, value: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
         // search setting if exist update else insert
-        let mut stmt = self.conn.prepare("SELECT count(*) FROM settings WHERE key = ?")?;
+        let mut stmt = conn.prepare("SELECT count(*) FROM settings WHERE key = ?")?;
         // cehck if length is 0 then insert else update
         let key_str: i32 = stmt.query_row([key], |row| row.get(0))?;
         if key_str != 0 {
-            self.conn.execute(
+            conn.execute(
                 "UPDATE settings SET value = ? WHERE key = ?",
                 [value.to_string(), key.to_string()],
             )?;
         } else {
-            self.conn.execute(
+            conn.execute(
                 "INSERT INTO settings (key, value) VALUES (?, ?)",
                 [key.to_string(), value.to_string()],
             )?;
@@ -42,13 +53,50 @@ impl Database {
     }
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        let mut stmt = self.conn.prepare("SELECT value FROM settings WHERE key = ?")?;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?")?;
         match stmt.query_row([key], |row| row.get(0)) {
             Ok(value) => Ok(Some(value)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
-    } 
+    }
+
+    pub fn clean(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        // conn.execute("DELETE FROM settings", [])?;
+        conn.execute("DELETE FROM libraries", [])?;
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // Library methods
+    pub fn get_libraries(&self) -> Result<Vec<Library>, Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, title FROM libraries")?;
+        let libraries = stmt.query_map([], |row| {
+            Ok(Library {
+                id: row.get(0)?,
+                title: row.get(1)?,
+            })
+        })?;
+        Ok(libraries.collect::<Result<Vec<Library>, rusqlite::Error>>()?)
+    }
+
+    pub fn add_library(&self, library: &Library) -> Result<(), Box<dyn std::error::Error>> {
+        info(&format!("Adding library: {:?}", library));
+        let conn = self.conn.lock().unwrap();
+        // check if library already exists
+        let mut stmt = conn.prepare("SELECT count(*) FROM libraries WHERE id = ?")?;
+        let key_str: i32 = stmt.query_row([library.id.to_string()], |row| row.get(0))?;
+        if key_str == 0 {
+            conn.execute(
+                "INSERT INTO libraries (id, title) VALUES (?, ?)",
+                [library.id.to_string(), library.title.to_string()],
+            )?;
+        }
+        Ok(())
+    }
 }
 
 
