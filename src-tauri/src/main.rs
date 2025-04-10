@@ -113,6 +113,12 @@ async fn clear_cache(Extension(kavita): Extension<SharedKavita>) -> (StatusCode,
     (StatusCode::OK, Json(()))
 }
 
+async fn update_server_library(Extension(kavita): Extension<SharedKavita>) -> (StatusCode, Json<()>) {
+    let kavita_guard = kavita.lock().await;
+    let _ = kavita_guard.update_server_library().await;
+    (StatusCode::OK, Json(()))
+}
+
 #[tokio::main]
 async fn start_server() {
     // Create CORS layer (allow all origins and methods)
@@ -132,6 +138,7 @@ async fn start_server() {
         .route("/api/server-settings", post(update_server_settings))
         .route("/api/library", get(get_libraries))
         .route("/api/clear-cache", get(clear_cache))
+        .route("/api/update-lib", get(update_server_library))
         .layer(cors)
         .layer(Extension(kavita));
 

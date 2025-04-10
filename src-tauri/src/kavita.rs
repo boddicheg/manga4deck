@@ -170,6 +170,21 @@ impl Kavita {
         self.db.clean()?;
         Ok(())
     }
+
+    pub async fn update_server_library(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let url = format!("http://{}/api/library/scan-all", self.ip);
+        if !self.offline_mode {
+            let client = reqwest::Client::new();
+            let response = client.post(url)
+                .header("Authorization", format!("Bearer {}", self.token))
+                .json(&json!({
+                    "force": true
+                }))
+                .send()
+                .await?;
+        }
+        Ok(())
+    }
     // -------------------------------------------------------------------------
     // Library methods
     pub async fn pull_libraries(&self) -> Result<(), Box<dyn std::error::Error>> {
