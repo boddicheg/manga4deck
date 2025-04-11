@@ -97,6 +97,24 @@ pub struct SeriesCover {
     pub file: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Volume {
+    pub id: i32,
+    pub series_id: i32,
+    pub chapter_id: i32,
+    pub volume_id: i32,
+    pub title: String,
+    pub read: i32,
+    pub pages: i32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct VolumeCover {
+    pub volume_id: i32,
+    pub file: String,
+}
+
+
 impl Kavita {
     pub fn new() -> Self {
         let db_path = get_appdir_path(DB_PATH);
@@ -274,7 +292,7 @@ impl Kavita {
                 self.db.add_series(&series)?;
             }
         }
-        
+
         Ok(())
     }
 
@@ -300,7 +318,7 @@ impl Kavita {
             let now = std::time::SystemTime::now() 
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_secs();
+                .as_millis();
             let mut hasher = Md5::new();
             hasher.update(format!("{}", now));
             let hash = hasher.finalize();
@@ -319,4 +337,75 @@ impl Kavita {
         // info(&format!("Series cover: {:?}", series_cover.clone()));
         Ok(series_cover)
     }
+
+    // -------------------------------------------------------------------------
+    // Volume methods
+    pub async fn pull_volumes(&self, series_id: &i32) -> Result<(), Box<dyn std::error::Error>> {
+        let client = reqwest::Client::new();
+        let response = client.get(format!("http://{}/api/series/series-detail?seriesId={}", self.ip, series_id))
+            .header("Accept", "application/json")
+            .header("Authorization", format!("Bearer {}", self.token))
+            .send()
+            .await?;
+        let body = response.text().await?;
+
+        let data: serde_json::Value = serde_json::from_str(&body)?;
+
+        if data["chapters"].is_array() && data["chapters"].as_array().map_or(0, |arr| arr.len()) > 0 {
+            let volumes: Vec<Volume> = data["volumes"].as_array().unwrap_or(&Vec::new()).iter().map(|v| Volume {
+                id: v["id"].as_i64().unwrap_or(0) as i32,
+                series_id: series_id.clone(),
+                chapter_id: v["chapters"][0]["id"].as_i64().unwrap_or(0) as i32,
+                volume_id: v["id"].as_i64().unwrap_or(0) as i32,
+                title: v["name"].as_str().unwrap_or("").to_string(),
+                read: v["pagesRead"].as_i64().unwrap_or(0) as i32,
+                pages: v["pages"].as_i64().unwrap_or(0) as i32,
+            }).collect();   
+            for volume in volumes {
+                self.db.add_volume(&volume)?;
+            }
+        }
+        // info(&format!("Volumes: {}", data));
+        Ok(())
+    }   
+
+    pub async fn get_volumes(&self, series_id: &i32) -> Result<Vec<Volume>, Box<dyn std::error::Error>> {
+        if !self.offline_mode {
+            self.pull_volumes(series_id).await?;
+        }
+        let volumes = self.db.get_volumes(series_id)?;
+        Ok(volumes)
+    }
+
+    pub async fn get_volume_cover(&self, volume_id: &i32) -> Result<VolumeCover, Box<dyn std::error::Error>> {
+        if !self.offline_mode {
+            let url = format!("http://{}/api/image/volume-cover?volumeId={}&apiKey={}", self.ip, volume_id, self.api_key);
+            let client = reqwest::Client::new();
+            let response = client.get(url)
+                .header("Content-Type", "image/png")
+                .send()
+                .await?;
+            let body = response.bytes().await?;
+            let now = std::time::SystemTime::now() 
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let mut hasher = Md5::new();
+            hasher.update(format!("{}", now));
+            let hash = hasher.finalize();
+            let cache_folder = get_datadir().join("manga4deck-cache").join("cache");    
+            let filename = cache_folder.join(format!("{}.png", format!("{:x}", hash)));
+            fs::write(&filename, body)?;
+            
+            let volume_cover = VolumeCover {
+                volume_id: *volume_id,
+                file: filename.to_string_lossy().into_owned(),
+            };
+            self.db.add_volume_cover(&volume_cover)?;
+        }
+        
+        let volume_cover = self.db.get_volume_cover(volume_id)?;
+        Ok(volume_cover)
+    }
+    // -------------------------------------------------------------------------    
 }

@@ -8,7 +8,9 @@ use crate::logger::{
 use crate::kavita::{
     Library,
     Series,
-    SeriesCover
+    SeriesCover,
+    Volume,
+    VolumeCover,
 };
 
 #[derive(Clone)]
@@ -36,6 +38,16 @@ impl Database {
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS series_cover (series_id INTEGER PRIMARY KEY, file TEXT)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS volumes (id INTEGER PRIMARY KEY, series_id INTEGER, chapter_id INTEGER, volume_id INTEGER, title TEXT, read INTEGER, pages INTEGER)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS volumes_cover (volume_id INTEGER PRIMARY KEY, file TEXT)",
             [],
         )?;
 
@@ -165,5 +177,57 @@ impl Database {
         Ok(SeriesCover { series_id: series_id.clone(), file: series_cover })
     }
     // -------------------------------------------------------------------------
+    // Volume methods
+    pub fn get_volumes(&self, series_id: &i32) -> Result<Vec<Volume>, Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, title, read, pages, chapter_id, volume_id FROM volumes WHERE series_id = ?")?;
+        let volumes = stmt.query_map([series_id.to_string()], |row| {
+            Ok(Volume { 
+                id: row.get(0)?,    
+                title: row.get(1)?,
+                read: row.get(2)?,
+                pages: row.get(3)?,
+                chapter_id: row.get(4)?,
+                volume_id: row.get(5)?,
+                series_id: series_id.clone(),
+            })
+        })?;
+        Ok(volumes.collect::<Result<Vec<Volume>, rusqlite::Error>>()?)
+        }   
+
+    pub fn add_volume(&self, volume: &Volume) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        // check if volume already exists
+        let mut stmt = conn.prepare("SELECT count(*) FROM volumes WHERE id = ?")?;
+        let key_str: i32 = stmt.query_row([volume.id.to_string()], |row| row.get(0))?;
+        if key_str == 0 {
+            conn.execute(
+                "INSERT INTO volumes (id, series_id, chapter_id, volume_id, title, read, pages) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [volume.id.to_string(), volume.series_id.to_string(), volume.chapter_id.to_string(), volume.volume_id.to_string(), volume.title.to_string(), volume.read.to_string(), volume.pages.to_string()],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn add_volume_cover(&self, volume_cover: &VolumeCover) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        // check if volume cover already exists
+        let mut stmt = conn.prepare("SELECT count(*) FROM volumes_cover WHERE volume_id = ?")?;
+        let key_str: i32 = stmt.query_row([volume_cover.volume_id.to_string()], |row| row.get(0))?;
+        if key_str == 0 {
+            conn.execute(
+                "INSERT INTO volumes_cover (volume_id, file) VALUES (?, ?)",
+                [volume_cover.volume_id.to_string(), volume_cover.file.to_string()],
+            )?;
+        }
+        Ok(())
+    }
+    
+    pub fn get_volume_cover(&self, volume_id: &i32) -> Result<VolumeCover, Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT file FROM volumes_cover WHERE volume_id = ?")?;
+        let volume_cover = stmt.query_row([volume_id.to_string()], |row| row.get(0))?;
+        Ok(VolumeCover { volume_id: volume_id.clone(), file: volume_cover })
+    }
 }
 

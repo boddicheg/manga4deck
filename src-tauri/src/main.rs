@@ -18,7 +18,8 @@ use kavita::{
     get_cache_size,
     Kavita,
     Library,
-    Series
+    Series,
+    Volume,
 };
 
 mod storage;
@@ -152,6 +153,33 @@ async fn get_series_cover(
     (StatusCode::OK, response)
 }
 
+async fn get_volume_cover(
+    Extension(kavita): Extension<SharedKavita>,
+    Path(volume_id): Path<i32>
+) -> (StatusCode, Response) {
+    info(&format!("Getting volume cover for volume: {}", volume_id));
+    let kavita_guard = kavita.lock().await;
+    let volume_cover = kavita_guard.get_volume_cover(&volume_id).await.unwrap();
+    let mut file = File::open(volume_cover.file).unwrap();
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).unwrap(); 
+    let response = Response::builder()
+        .header("Content-Type", "image/png")
+        .body(axum::body::Body::from(buffer))
+        .unwrap();
+    (StatusCode::OK, response)
+}
+
+async fn get_volumes(
+    Extension(kavita): Extension<SharedKavita>,
+    Path(series_id): Path<i32>
+) -> (StatusCode, Json<Vec<Volume>>) {
+    info(&format!("Getting volumes for series: {}", series_id));
+    let kavita_guard = kavita.lock().await;
+    let volumes = kavita_guard.get_volumes(&series_id).await.unwrap();
+    (StatusCode::OK, Json(volumes))
+}
+
 #[tokio::main]
 async fn start_server() {
     // Create CORS layer (allow all origins and methods)
@@ -173,7 +201,9 @@ async fn start_server() {
         .route("/api/clear-cache", get(clear_cache))
         .route("/api/update-lib", get(update_server_library))
         .route("/api/series/{library_id}", get(get_series))
+        .route("/api/volumes/{series_id}", get(get_volumes))
         .route("/api/series-cover/{series_id}", get(get_series_cover))
+        .route("/api/volumes-cover/{volume_id}", get(get_volume_cover))
         .layer(cors)
         .layer(Extension(kavita));
 
