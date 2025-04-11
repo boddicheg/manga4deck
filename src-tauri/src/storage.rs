@@ -6,7 +6,9 @@ use crate::logger::{
 };
 
 use crate::kavita::{
-    Library
+    Library,
+    Series,
+    SeriesCover
 };
 
 #[derive(Clone)]
@@ -24,7 +26,16 @@ impl Database {
             [],
         )?;
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS libraries (id TEXT PRIMARY KEY, title TEXT)",
+            "CREATE TABLE IF NOT EXISTS libraries (id INTEGER PRIMARY KEY, title TEXT)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS series (id INTEGER PRIMARY KEY, library_id INTEGER, title TEXT, read INTEGER, pages INTEGER)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS series_cover (series_id INTEGER PRIMARY KEY, file TEXT)",
             [],
         )?;
 
@@ -66,6 +77,10 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         // conn.execute("DELETE FROM settings", [])?;
         conn.execute("DELETE FROM libraries", [])?;
+        conn.execute("DELETE FROM series", [])?;
+        conn.execute("DELETE FROM series_cover", [])?;
+        // conn.execute("DROP TABLE IF EXISTS series", [])?;
+        // conn.execute("DROP TABLE IF EXISTS series_cover", [])?;
         Ok(())
     }
 
@@ -84,7 +99,7 @@ impl Database {
     }
 
     pub fn add_library(&self, library: &Library) -> Result<(), Box<dyn std::error::Error>> {
-        info(&format!("Adding library: {:?}", library));
+        // info(&format!("Adding library: {:?}", library));
         let conn = self.conn.lock().unwrap();
         // check if library already exists
         let mut stmt = conn.prepare("SELECT count(*) FROM libraries WHERE id = ?")?;
@@ -97,6 +112,58 @@ impl Database {
         }
         Ok(())
     }
-}
+    // -------------------------------------------------------------------------
+    // Series methods
+    pub fn get_series(&self, library_id: &i32) -> Result<Vec<Series>, Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, title, read, pages FROM series WHERE library_id = ?")?;
+        let series = stmt.query_map([library_id.to_string()], |row| { 
+            Ok(Series { 
+                id: row.get(0)?,
+                title: row.get(1)?, 
+                read: row.get(2)?,
+                pages: row.get(3)?,
+                library_id: library_id.clone(),
+            })
+        })?;
+        Ok(series.collect::<Result<Vec<Series>, rusqlite::Error>>()?)
+    }
 
+    pub fn add_series(&self, series: &Series) -> Result<(), Box<dyn std::error::Error>> {
+        // info(&format!("Adding series: {:?}", series));
+        let conn = self.conn.lock().unwrap();
+        // check if series already exist
+        let mut stmt = conn.prepare("SELECT count(*) FROM series WHERE id = ?")?;
+        let key_str: i32 = stmt.query_row([series.id.to_string()], |row| row.get(0))?;
+        if key_str == 0 {
+            conn.execute(
+                "INSERT INTO series (id, library_id, title, read, pages) VALUES (?, ?, ?, ?, ?)",
+                [series.id.to_string(), series.library_id.to_string(), series.title.to_string(), series.read.to_string(), series.pages.to_string()],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn add_series_cover(&self, series_cover: &SeriesCover) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        // check if series cover already exists
+        let mut stmt = conn.prepare("SELECT count(*) FROM series_cover WHERE series_id = ?")?;
+        let key_str: i32 = stmt.query_row([series_cover.series_id.to_string()], |row| row.get(0))?;
+        if key_str == 0 {
+            conn.execute(
+                "INSERT INTO series_cover (series_id, file) VALUES (?, ?)",
+                [series_cover.series_id.to_string(), series_cover.file.to_string()],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn get_series_cover(&self, series_id: &i32) -> Result<SeriesCover, Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT file FROM series_cover WHERE series_id = ?")?;
+        let series_cover = stmt.query_row([series_id.to_string()], |row| row.get(0))?;
+        Ok(SeriesCover { series_id: series_id.clone(), file: series_cover })
+    }
+    // -------------------------------------------------------------------------
+}
 

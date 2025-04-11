@@ -1,12 +1,9 @@
-    use std::path::{PathBuf};
+use std::path::{PathBuf};
 use std::fs;
-use tokio::sync::OnceCell;
-use std::sync::Mutex;
 use serde::{Serialize, Deserialize};
 use serde_json::json;
 use reqwest;
-use std::sync::Arc;
-use tokio::runtime::Handle;
+use md5::{Md5, Digest};
 use crate::logger::{
     info
 };
@@ -71,8 +68,17 @@ pub struct ConnectionCreds {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Library {
-    pub id: String,
+    pub id: i32,
     pub title: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Series {
+    pub id: i32,      
+    pub library_id: i32,
+    pub title: String,
+    pub read: i32,
+    pub pages: i32,
 }
 
 #[derive(Clone)]
@@ -82,6 +88,13 @@ pub struct Kavita {
     pub logged_as: String,
     pub offline_mode: bool,
     pub ip: String,
+    pub api_key: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SeriesCover {
+    pub series_id: i32,
+    pub file: String,
 }
 
 impl Kavita {
@@ -98,6 +111,7 @@ impl Kavita {
             logged_as: String::new(),
             offline_mode: false,
             ip: DEFAULT_IP.to_string(),
+            api_key: DEFAULT_API_KEY.to_string(),
         };
 
         kavita
@@ -148,6 +162,7 @@ impl Kavita {
             let data: serde_json::Value = serde_json::from_str(&body)?;
             self.token = data["token"].as_str().unwrap_or("").to_string();
             self.logged_as = data["username"].as_str().unwrap_or("").to_string();
+            self.api_key = data["apiKey"].as_str().unwrap_or("").to_string();
             info(&format!("Logged as: {}", self.logged_as));
         } else {
             self.offline_mode = true;
@@ -175,7 +190,7 @@ impl Kavita {
         let url = format!("http://{}/api/library/scan-all", self.ip);
         if !self.offline_mode {
             let client = reqwest::Client::new();
-            let response = client.post(url)
+            let _ = client.post(url)
                 .header("Authorization", format!("Bearer {}", self.token))
                 .json(&json!({
                     "force": true
@@ -196,16 +211,21 @@ impl Kavita {
 
         if response.status().is_success() {
             let body = response.text().await?;
+            info(&format!("Libraries: {}", body));
             let data: serde_json::Value = serde_json::from_str(&body)?;
-            info(&format!("Libraries: {}", data));
+            // info(&format!("Libraries: {}", data));
             let libraries: Vec<Library> = data.as_array().unwrap().iter().map(|v| Library {
-                id: v["id"].as_i64().unwrap_or(0).to_string(),
+                id: v["id"].as_i64().unwrap_or(0) as i32,
                 title: v["name"].as_str().unwrap_or("").to_string(),
             }).collect();
             for library in libraries {
                 self.db.add_library(&library)?;
             }
         }
+        else {
+            info(&format!("Failed to get libraries: response status {}", response.status()));
+        }   
+
 
         Ok(())
     }
@@ -217,5 +237,86 @@ impl Kavita {
         let libraries = self.db.get_libraries()?;
         info(&format!("Libraries: {:?}", libraries.clone()));
         Ok(libraries)
+    }
+
+    // -------------------------------------------------------------------------
+    // Series methods
+    pub async fn pull_series(&self, library_id: &i32) -> Result<(), Box<dyn std::error::Error>> {
+        // let mut result = Vec::new();
+        if !self.offline_mode {
+            let client = reqwest::Client::new();
+            let response = client.post(format!("http://{}/api/series/v2", self.ip))
+                .header("Authorization", format!("Bearer {}", self.token))
+                .json(&json!({
+                    "statements": [
+                        {
+                            "comparison": 0,
+                            "field": 19,
+                            "value": library_id.to_string()
+                        }
+                    ],
+                    "combination": 1,
+                    "limitTo": 0
+                }))
+                .send()
+                .await?;
+            let body = response.text().await?;
+            let data: serde_json::Value = serde_json::from_str(&body)?;
+            // info(&format!("Series: {}", data));
+            let series: Vec<Series> = data.as_array().unwrap().iter().map(|v| Series {
+                id: v["id"].as_i64().unwrap_or(0) as i32,
+                library_id: library_id.clone(),
+                title: v["name"].as_str().unwrap_or("").to_string(),
+                read: v["pagesRead"].as_i64().unwrap_or(0) as i32 * 100 / v["pages"].as_i64().unwrap_or(0) as i32,
+                pages: v["pages"].as_i64().unwrap_or(0) as i32,
+            }).collect();
+            for series in series {
+                self.db.add_series(&series)?;
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub async fn get_series(&self, library_id: &i32) -> Result<Vec<Series>, Box<dyn std::error::Error>> {
+        if !self.offline_mode {
+            self.pull_series(library_id).await?;
+        }
+        let series = self.db.get_series(library_id)?;
+        info(&format!("Series: {:?}", series.clone()));
+        Ok(series)
+    }
+
+    pub async fn get_series_cover(&self, series_id: &i32) -> Result<SeriesCover, Box<dyn std::error::Error>> {
+        if !self.offline_mode {
+            let url = format!("http://{}/api/image/series-cover?seriesId={}&apiKey={}", self.ip, series_id, self.api_key);
+            let client = reqwest::Client::new();
+            let response = client.get(url)
+                // .header("Authorization", format!("Bearer {}", self.token))
+                .header("Content-Type", "image/png")
+                .send()
+                .await?;
+            let body = response.bytes().await?;
+            let now = std::time::SystemTime::now() 
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let mut hasher = Md5::new();
+            hasher.update(format!("{}", now));
+            let hash = hasher.finalize();
+            let cache_folder = get_datadir().join("manga4deck-cache").join("cache");    
+            let filename = cache_folder.join(format!("{}.png", format!("{:x}", hash)));
+            fs::write(&filename, body)?;
+            
+            let series_cover = SeriesCover {
+                series_id: *series_id,
+                file: filename.to_string_lossy().into_owned(),
+            };
+            self.db.add_series_cover(&series_cover)?;
+        }
+        
+        let series_cover = self.db.get_series_cover(series_id)?;
+        // info(&format!("Series cover: {:?}", series_cover.clone()));
+        Ok(series_cover)
     }
 }

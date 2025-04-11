@@ -1,6 +1,10 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::fs::File;
+use std::io::Read;
+use axum::response::Response;
+
 mod logger;
 use logger::{   
     info, 
@@ -13,7 +17,8 @@ use kavita::{
     ConnectionCreds,
     get_cache_size,
     Kavita,
-    Library
+    Library,
+    Series
 };
 
 mod storage;
@@ -23,11 +28,11 @@ use axum::{
     Router,
     http::StatusCode,
     Json,
-    response::IntoResponse,
-    extract::Extension
+    extract::Extension,
+    extract::Path
 };
 use tower_http::cors::{Any, CorsLayer};
-use serde::{Serialize};
+use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -73,11 +78,12 @@ async fn get_status(Extension(kavita): Extension<SharedKavita>) -> (StatusCode, 
 
 async fn update_server_settings(Extension(kavita): Extension<SharedKavita>, Json(creds): Json<ConnectionCreds>) -> (StatusCode, Json<ConnectionCreds>) {
     info(&format!("Updating server settings: {:?}", creds));
-    let kavita_guard = kavita.lock().await;
+    let mut kavita_guard = kavita.lock().await;
     let _ = kavita_guard.insert_setting("ip", &creds.ip);
     let _ = kavita_guard.insert_setting("username", &creds.username);
     let _ = kavita_guard.insert_setting("password", &creds.password);
     let _ = kavita_guard.insert_setting("api_key", &creds.api_key);
+    let _ = kavita_guard.reconnect_with_creds().await;
     (StatusCode::OK, Json(creds))
 }
 
@@ -119,6 +125,33 @@ async fn update_server_library(Extension(kavita): Extension<SharedKavita>) -> (S
     (StatusCode::OK, Json(()))
 }
 
+async fn get_series(
+    Extension(kavita): Extension<SharedKavita>,
+    Path(library_id): Path<i32>
+) -> (StatusCode, Json<Vec<Series>>) {
+    info(&format!("Getting series for library: {}", library_id));
+    let kavita_guard = kavita.lock().await;
+    let series = kavita_guard.get_series(&library_id).await.unwrap();
+    (StatusCode::OK, Json(series))
+}
+
+async fn get_series_cover(
+    Extension(kavita): Extension<SharedKavita>,
+    Path(series_id): Path<i32>
+) -> (StatusCode, Response) {
+    info(&format!("Getting series cover for series: {}", series_id));
+    let kavita_guard = kavita.lock().await;
+    let series_cover = kavita_guard.get_series_cover(&series_id).await.unwrap();
+    let mut file = File::open(series_cover.file).unwrap();
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).unwrap(); 
+    let response = Response::builder()
+        .header("Content-Type", "image/png")
+        .body(axum::body::Body::from(buffer))
+        .unwrap();
+    (StatusCode::OK, response)
+}
+
 #[tokio::main]
 async fn start_server() {
     // Create CORS layer (allow all origins and methods)
@@ -139,6 +172,8 @@ async fn start_server() {
         .route("/api/library", get(get_libraries))
         .route("/api/clear-cache", get(clear_cache))
         .route("/api/update-lib", get(update_server_library))
+        .route("/api/series/{library_id}", get(get_series))
+        .route("/api/series-cover/{series_id}", get(get_series_cover))
         .layer(cors)
         .layer(Extension(kavita));
 
