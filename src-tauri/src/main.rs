@@ -140,7 +140,7 @@ async fn get_series_cover(
     Extension(kavita): Extension<SharedKavita>,
     Path(series_id): Path<i32>
 ) -> (StatusCode, Response) {
-    info(&format!("Getting series cover for series: {}", series_id));
+    // info(&format!("Getting series cover for series: {}", series_id));
     let kavita_guard = kavita.lock().await;
     let series_cover = kavita_guard.get_series_cover(&series_id).await.unwrap();
     let mut file = File::open(series_cover.file).unwrap();
@@ -157,7 +157,7 @@ async fn get_volume_cover(
     Extension(kavita): Extension<SharedKavita>,
     Path(volume_id): Path<i32>
 ) -> (StatusCode, Response) {
-    info(&format!("Getting volume cover for volume: {}", volume_id));
+    // info(&format!("Getting volume cover for volume: {}", volume_id));
     let kavita_guard = kavita.lock().await;
     let volume_cover = kavita_guard.get_volume_cover(&volume_id).await.unwrap();
     let mut file = File::open(volume_cover.file).unwrap();
@@ -178,6 +178,19 @@ async fn get_volumes(
     let kavita_guard = kavita.lock().await;
     let volumes = kavita_guard.get_volumes(&series_id).await.unwrap();
     (StatusCode::OK, Json(volumes))
+}
+
+async fn get_picture(
+    Extension(kavita): Extension<SharedKavita>,
+    Path((series_id, volume_id, chapter_id, page)): Path<(i32, i32, i32, i32)>
+) -> (StatusCode, Response) {
+    info(&format!("Getting picture for series: {}, volume: {}, chapter: {}, page: {}", series_id, volume_id, chapter_id, page));
+    let kavita_guard = kavita.lock().await;
+    let picture = kavita_guard.get_picture(&chapter_id, &page).await.unwrap();
+    let mut file = File::open(picture).unwrap();
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).unwrap(); 
+    (StatusCode::OK, Response::builder().body(axum::body::Body::from(buffer)).unwrap())
 }
 
 #[tokio::main]
@@ -204,6 +217,7 @@ async fn start_server() {
         .route("/api/volumes/{series_id}", get(get_volumes))
         .route("/api/series-cover/{series_id}", get(get_series_cover))
         .route("/api/volumes-cover/{volume_id}", get(get_volume_cover))
+        .route("/api/picture/{series}/{volume}/{chapter}/{page}", get(get_picture))
         .layer(cors)
         .layer(Extension(kavita));
 

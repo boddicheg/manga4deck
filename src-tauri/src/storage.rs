@@ -11,6 +11,7 @@ use crate::kavita::{
     SeriesCover,
     Volume,
     VolumeCover,
+    MangaPicture,
 };
 
 #[derive(Clone)]
@@ -48,6 +49,11 @@ impl Database {
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS volumes_cover (volume_id INTEGER PRIMARY KEY, file TEXT)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS manga_pictures (id INTEGER PRIMARY KEY AUTOINCREMENT, chapter_id INTEGER, page INTEGER, file TEXT)",
             [],
         )?;
 
@@ -91,6 +97,9 @@ impl Database {
         conn.execute("DELETE FROM libraries", [])?;
         conn.execute("DELETE FROM series", [])?;
         conn.execute("DELETE FROM series_cover", [])?;
+        conn.execute("DELETE FROM volumes", [])?;
+        conn.execute("DELETE FROM volumes_cover", [])?;
+        conn.execute("DELETE FROM manga_pictures", [])?;
         // conn.execute("DROP TABLE IF EXISTS series", [])?;
         // conn.execute("DROP TABLE IF EXISTS series_cover", [])?;
         Ok(())
@@ -222,12 +231,34 @@ impl Database {
         }
         Ok(())
     }
-    
+
     pub fn get_volume_cover(&self, volume_id: &i32) -> Result<VolumeCover, Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT file FROM volumes_cover WHERE volume_id = ?")?;
         let volume_cover = stmt.query_row([volume_id.to_string()], |row| row.get(0))?;
         Ok(VolumeCover { volume_id: volume_id.clone(), file: volume_cover })
+    }
+
+    // -------------------------------------------------------------------------
+    // Picture methods
+    pub fn add_picture(&self, picture: &MangaPicture) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT count(*) FROM manga_pictures WHERE chapter_id = ? AND page = ?")?;
+        let key_str: i32 = stmt.query_row([picture.chapter_id.to_string(), picture.page.to_string()], |row| row.get(0))?; 
+        if key_str == 0 {
+            conn.execute(
+                "INSERT INTO manga_pictures (chapter_id, page, file) VALUES (?, ?, ?)",
+                [picture.chapter_id.to_string(), picture.page.to_string(), picture.file.to_string()],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn get_picture(&self, chapter_id: &i32, page: &i32) -> Result<String, Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT file FROM manga_pictures WHERE chapter_id = ? AND page = ?")?;
+        let picture = stmt.query_row([chapter_id.to_string(), page.to_string()], |row| row.get(0))?;
+        Ok(picture)
     }
 }
 

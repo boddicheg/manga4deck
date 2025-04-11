@@ -114,6 +114,12 @@ pub struct VolumeCover {
     pub file: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MangaPicture {
+    pub chapter_id: i32,
+    pub page: i32,
+    pub file: String,
+}
 
 impl Kavita {
     pub fn new() -> Self {
@@ -301,7 +307,7 @@ impl Kavita {
             self.pull_series(library_id).await?;
         }
         let series = self.db.get_series(library_id)?;
-        info(&format!("Series: {:?}", series.clone()));
+        // info(&format!("Series: {:?}", series.clone()));
         Ok(series)
     }
 
@@ -342,14 +348,16 @@ impl Kavita {
     // Volume methods
     pub async fn pull_volumes(&self, series_id: &i32) -> Result<(), Box<dyn std::error::Error>> {
         let client = reqwest::Client::new();
-        let response = client.get(format!("http://{}/api/series/series-detail?seriesId={}", self.ip, series_id))
+        let response = client.get(format!("http://{}/api/series/series-detail?seriesId={}&apiKey={}", self.ip, series_id, self.api_key))
             .header("Accept", "application/json")
             .header("Authorization", format!("Bearer {}", self.token))
             .send()
             .await?;
         let body = response.text().await?;
-
+        // info(&format!("Volumes: {}", body));
         let data: serde_json::Value = serde_json::from_str(&body)?;
+
+        // info(&format!("Volumes: {:?}", data["chapters"].as_array().unwrap_or(&Vec::new()).len()));
 
         if data["chapters"].is_array() && data["chapters"].as_array().map_or(0, |arr| arr.len()) > 0 {
             let volumes: Vec<Volume> = data["volumes"].as_array().unwrap_or(&Vec::new()).iter().map(|v| Volume {
@@ -408,4 +416,36 @@ impl Kavita {
         Ok(volume_cover)
     }
     // -------------------------------------------------------------------------    
+    // Picture methods
+    pub async fn get_picture(&self, chapter_id: &i32, page: &i32) -> Result<String, Box<dyn std::error::Error>> {
+        if !self.offline_mode {
+            let url = format!("http://{}/api/reader/image?chapterId={}&apiKey={}&page={}", self.ip, chapter_id, self.api_key, page);
+            let client = reqwest::Client::new();
+            let response = client.get(url)
+                .header("Content-Type", "image/png")
+                .send()
+                .await?;
+            let body = response.bytes().await?;
+            let now = std::time::SystemTime::now() 
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let mut hasher = Md5::new();
+            hasher.update(format!("{}", now));
+            let hash = hasher.finalize();
+            let cache_folder = get_datadir().join("manga4deck-cache").join("cache");    
+            let filename = cache_folder.join(format!("{}.png", format!("{:x}", hash)));
+            fs::write(&filename, body)?;
+
+            let picture = MangaPicture {
+                chapter_id: *chapter_id,
+                page: *page,
+                file: filename.to_string_lossy().into_owned(),
+            };
+            self.db.add_picture(&picture)?;
+        }
+
+        let picture = self.db.get_picture(chapter_id, page)?;
+        Ok(picture)
+    }
 }
