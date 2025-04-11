@@ -215,6 +215,12 @@ impl Database {
                 [volume.id.to_string(), volume.series_id.to_string(), volume.chapter_id.to_string(), volume.volume_id.to_string(), volume.title.to_string(), volume.read.to_string(), volume.pages.to_string()],
             )?;
         }
+        else {
+            conn.execute(
+                "UPDATE volumes SET title = ?, read = ?, pages = ? WHERE id = ?",
+                [volume.title.to_string(), volume.read.to_string(), volume.pages.to_string(), volume.id.to_string()],
+            )?;
+        }
         Ok(())
     }
 
@@ -260,5 +266,7 @@ impl Database {
         let picture = stmt.query_row([chapter_id.to_string(), page.to_string()], |row| row.get(0))?;
         Ok(picture)
     }
+
+
 }
 

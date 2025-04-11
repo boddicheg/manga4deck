@@ -51,6 +51,17 @@ pub fn get_cache_size(delimiter: u64) -> u64 {
     size / delimiter
 }
 
+pub fn generate_hash_from_now() -> String {
+    let now = std::time::SystemTime::now() 
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let mut hasher = Md5::new();
+    hasher.update(format!("{}", now));
+    let hash = hasher.finalize();
+    format!("{:x}", hash)
+}
+
 const DB_PATH: &str = "cache.sqlite";
 
 const DEFAULT_IP: &str = "localhost:5000";
@@ -121,11 +132,19 @@ pub struct MangaPicture {
     pub file: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ReadProgress {
+    pub series_id: i32,
+    pub volume_id: i32,
+    pub chapter_id: i32,
+    pub page: i32,
+}
+
 impl Kavita {
     pub fn new() -> Self {
         let db_path = get_appdir_path(DB_PATH);
         info(&format!("Database created at {}", db_path));
-        info(&format!("Cache size: {} GB", get_cache_size(1024 * 1024 * 1024)));
+        info(&format!("Cache size: {} MB", get_cache_size(1024 * 1024)));
 
         let db = Database::new(&db_path).expect("Failed to create database");
 
@@ -235,9 +254,8 @@ impl Kavita {
 
         if response.status().is_success() {
             let body = response.text().await?;
-            info(&format!("Libraries: {}", body));
+            // info(&format!("Libraries: {}", body));
             let data: serde_json::Value = serde_json::from_str(&body)?;
-            // info(&format!("Libraries: {}", data));
             let libraries: Vec<Library> = data.as_array().unwrap().iter().map(|v| Library {
                 id: v["id"].as_i64().unwrap_or(0) as i32,
                 title: v["name"].as_str().unwrap_or("").to_string(),
@@ -259,7 +277,6 @@ impl Kavita {
             self.pull_libraries().await?;
         }
         let libraries = self.db.get_libraries()?;
-        info(&format!("Libraries: {:?}", libraries.clone()));
         Ok(libraries)
     }
 
@@ -286,7 +303,6 @@ impl Kavita {
                 .await?;
             let body = response.text().await?;
             let data: serde_json::Value = serde_json::from_str(&body)?;
-            // info(&format!("Series: {}", data));
             let series: Vec<Series> = data.as_array().unwrap().iter().map(|v| Series {
                 id: v["id"].as_i64().unwrap_or(0) as i32,
                 library_id: library_id.clone(),
@@ -306,8 +322,9 @@ impl Kavita {
         if !self.offline_mode {
             self.pull_series(library_id).await?;
         }
-        let series = self.db.get_series(library_id)?;
-        // info(&format!("Series: {:?}", series.clone()));
+        let mut series = self.db.get_series(library_id)?;
+        // sort series by title and return sorted series
+        series.sort_by_key(|s| s.title.clone());
         Ok(series)
     }
 
@@ -321,15 +338,9 @@ impl Kavita {
                 .send()
                 .await?;
             let body = response.bytes().await?;
-            let now = std::time::SystemTime::now() 
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis();
-            let mut hasher = Md5::new();
-            hasher.update(format!("{}", now));
-            let hash = hasher.finalize();
+            let hash = generate_hash_from_now();
             let cache_folder = get_datadir().join("manga4deck-cache").join("cache");    
-            let filename = cache_folder.join(format!("{}.png", format!("{:x}", hash)));
+            let filename = cache_folder.join(format!("{}.png", hash));
             fs::write(&filename, body)?;
             
             let series_cover = SeriesCover {
@@ -340,7 +351,6 @@ impl Kavita {
         }
         
         let series_cover = self.db.get_series_cover(series_id)?;
-        // info(&format!("Series cover: {:?}", series_cover.clone()));
         Ok(series_cover)
     }
 
@@ -354,10 +364,7 @@ impl Kavita {
             .send()
             .await?;
         let body = response.text().await?;
-        // info(&format!("Volumes: {}", body));
         let data: serde_json::Value = serde_json::from_str(&body)?;
-
-        // info(&format!("Volumes: {:?}", data["chapters"].as_array().unwrap_or(&Vec::new()).len()));
 
         if data["chapters"].is_array() && data["chapters"].as_array().map_or(0, |arr| arr.len()) > 0 {
             let volumes: Vec<Volume> = data["volumes"].as_array().unwrap_or(&Vec::new()).iter().map(|v| Volume {
@@ -373,7 +380,6 @@ impl Kavita {
                 self.db.add_volume(&volume)?;
             }
         }
-        // info(&format!("Volumes: {}", data));
         Ok(())
     }   
 
@@ -381,7 +387,9 @@ impl Kavita {
         if !self.offline_mode {
             self.pull_volumes(series_id).await?;
         }
-        let volumes = self.db.get_volumes(series_id)?;
+        let mut volumes = self.db.get_volumes(series_id)?;
+        // sort volumes by title and converted to int and return sorted volumes
+        volumes.sort_by_key(|v| v.title.clone().replace(|c: char| !c.is_digit(10), "").parse::<i32>().unwrap_or(0));
         Ok(volumes)
     }
 
@@ -394,15 +402,9 @@ impl Kavita {
                 .send()
                 .await?;
             let body = response.bytes().await?;
-            let now = std::time::SystemTime::now() 
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis();
-            let mut hasher = Md5::new();
-            hasher.update(format!("{}", now));
-            let hash = hasher.finalize();
+            let hash = generate_hash_from_now();
             let cache_folder = get_datadir().join("manga4deck-cache").join("cache");    
-            let filename = cache_folder.join(format!("{}.png", format!("{:x}", hash)));
+            let filename = cache_folder.join(format!("{}.png", hash));
             fs::write(&filename, body)?;
             
             let volume_cover = VolumeCover {
@@ -426,15 +428,9 @@ impl Kavita {
                 .send()
                 .await?;
             let body = response.bytes().await?;
-            let now = std::time::SystemTime::now() 
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis();
-            let mut hasher = Md5::new();
-            hasher.update(format!("{}", now));
-            let hash = hasher.finalize();
+            let hash = generate_hash_from_now();
             let cache_folder = get_datadir().join("manga4deck-cache").join("cache");    
-            let filename = cache_folder.join(format!("{}.png", format!("{:x}", hash)));
+            let filename = cache_folder.join(format!("{}.png", hash));
             fs::write(&filename, body)?;
 
             let picture = MangaPicture {
@@ -447,5 +443,52 @@ impl Kavita {
 
         let picture = self.db.get_picture(chapter_id, page)?;
         Ok(picture)
+    }
+    // -------------------------------------------------------------------------
+    // Read Progress methods
+    pub async fn save_progress(&self, progress: &ReadProgress) -> Result<(), Box<dyn std::error::Error>> {
+        let url = format!("http://{}/api/reader/progress", self.ip);
+        if !self.offline_mode {
+            let client = reqwest::Client::new();
+            let _ = client.post(url)
+                .header("Authorization", format!("Bearer {}", self.token))
+                .json(&json!({
+                    "seriesId": progress.series_id,
+                    "volumeId": progress.volume_id,
+                    "chapterId": progress.chapter_id,
+                    "pageNum": progress.page,
+                }))
+                .send()
+                .await?;
+        }
+        Ok(())
+    } 
+
+    pub async fn set_volume_as_read(&self, series_id: &i32, volume_id: &i32) -> Result<(), Box<dyn std::error::Error>> {
+        let url = format!("http://{}/api/reader/mark-volume-read", self.ip);
+        let client = reqwest::Client::new();
+        let _ = client.post(url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .json(&json!({
+                "seriesId": series_id,
+                "volumeId": volume_id,
+            }))
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_volume_as_unread(&self, series_id: &i32, volume_id: &i32) -> Result<(), Box<dyn std::error::Error>> {
+        let url = format!("http://{}/api/reader/mark-volume-unread", self.ip);
+        let client = reqwest::Client::new();
+        let _ = client.post(url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .json(&json!({
+                "seriesId": series_id,
+                "volumeId": volume_id,
+            }))
+            .send()
+            .await?;    
+        Ok(())
     }
 }

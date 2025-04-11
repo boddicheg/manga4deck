@@ -20,6 +20,7 @@ use kavita::{
     Library,
     Series,
     Volume,
+    ReadProgress,
 };
 
 mod storage;
@@ -67,7 +68,7 @@ async fn get_status(Extension(kavita): Extension<SharedKavita>) -> (StatusCode, 
         .expect("Failed to get IP setting")
         .unwrap_or_else(|| "".to_string());
     let logged_as = kavita_guard.logged_as.clone();
-    let cache = get_cache_size(1024 * 1024 * 1024);
+    let cache = get_cache_size(1024 * 1024);
 
     (StatusCode::OK, Json(StatusResponse {
         status: true,
@@ -130,7 +131,7 @@ async fn get_series(
     Extension(kavita): Extension<SharedKavita>,
     Path(library_id): Path<i32>
 ) -> (StatusCode, Json<Vec<Series>>) {
-    info(&format!("Getting series for library: {}", library_id));
+    // info(&format!("Getting series for library: {}", library_id));
     let kavita_guard = kavita.lock().await;
     let series = kavita_guard.get_series(&library_id).await.unwrap();
     (StatusCode::OK, Json(series))
@@ -174,7 +175,7 @@ async fn get_volumes(
     Extension(kavita): Extension<SharedKavita>,
     Path(series_id): Path<i32>
 ) -> (StatusCode, Json<Vec<Volume>>) {
-    info(&format!("Getting volumes for series: {}", series_id));
+    // info(&format!("Getting volumes for series: {}", series_id));
     let kavita_guard = kavita.lock().await;
     let volumes = kavita_guard.get_volumes(&series_id).await.unwrap();
     (StatusCode::OK, Json(volumes))
@@ -184,13 +185,35 @@ async fn get_picture(
     Extension(kavita): Extension<SharedKavita>,
     Path((series_id, volume_id, chapter_id, page)): Path<(i32, i32, i32, i32)>
 ) -> (StatusCode, Response) {
-    info(&format!("Getting picture for series: {}, volume: {}, chapter: {}, page: {}", series_id, volume_id, chapter_id, page));
+    // info(&format!("Getting picture for series: {}, volume: {}, chapter: {}, page: {}", series_id, volume_id, chapter_id, page));
     let kavita_guard = kavita.lock().await;
     let picture = kavita_guard.get_picture(&chapter_id, &page).await.unwrap();
+    kavita_guard.save_progress(&ReadProgress { series_id, volume_id, chapter_id, page }).await.unwrap();
+
     let mut file = File::open(picture).unwrap();
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer).unwrap(); 
     (StatusCode::OK, Response::builder().body(axum::body::Body::from(buffer)).unwrap())
+}
+
+async fn read_volume(
+    Extension(kavita): Extension<SharedKavita>,
+    Path((series_id, volume_id)): Path<(i32, i32)>
+) -> (StatusCode, Json<()>) {
+    info(&format!("Reading volume: {}, {}", series_id, volume_id));
+    let kavita_guard = kavita.lock().await;
+    let _ = kavita_guard.set_volume_as_read(&series_id, &volume_id).await;
+    (StatusCode::OK, Json(()))
+}
+
+async fn unread_volume(
+    Extension(kavita): Extension<SharedKavita>, 
+    Path((series_id, volume_id)): Path<(i32, i32)>
+) -> (StatusCode, Json<()>) {
+    info(&format!("Unreading volume: {}, {}", series_id, volume_id));
+    let kavita_guard = kavita.lock().await;
+    let _ = kavita_guard.set_volume_as_unread(&series_id, &volume_id).await;
+    (StatusCode::OK, Json(()))
 }
 
 #[tokio::main]
@@ -218,6 +241,8 @@ async fn start_server() {
         .route("/api/series-cover/{series_id}", get(get_series_cover))
         .route("/api/volumes-cover/{volume_id}", get(get_volume_cover))
         .route("/api/picture/{series}/{volume}/{chapter}/{page}", get(get_picture))
+        .route("/api/read-volume/{series_id}/{volume_id}", get(read_volume))
+        .route("/api/unread-volume/{series_id}/{volume_id}", get(unread_volume))
         .layer(cors)
         .layer(Extension(kavita));
 
