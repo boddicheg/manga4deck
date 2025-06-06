@@ -261,7 +261,7 @@ const Series: React.FC = () => {
                     className={`h-full ${
                       volume.read === volume.pages
                         ? "bg-green-500"
-                        : volume.cached 
+                        : volume.is_cached 
                         ? "bg-yellow-500"
                         : "bg-blue-500"
                     }`}
@@ -277,7 +277,7 @@ const Series: React.FC = () => {
                   style={{
                     background: volume.read === volume.pages
                       ? 'rgba(4, 120, 87, 0.7)'
-                      : volume.cached
+                      : volume.is_cached
                       ? 'rgba(245, 158, 11, 0.7)'
                       : 'rgba(0, 0, 0, 0.7)',
                     backdropFilter: 'blur(5px)',
@@ -291,7 +291,11 @@ const Series: React.FC = () => {
                 >
                   <div 
                     className={`text-sm whitespace-nowrap text-center ${
-                      currentIndex === index ? "text-gray-300" : "text-white truncate"
+                      volume.is_cached
+                        ? 'text-black'
+                        : currentIndex === index
+                        ? 'text-gray-300'
+                        : 'text-white truncate'
                     }`}
                     ref={(el) => {
                       if (el) {

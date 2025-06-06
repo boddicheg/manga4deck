@@ -199,10 +199,11 @@ impl Database {
                 chapter_id: row.get(4)?,
                 volume_id: row.get(5)?,
                 series_id: series_id.clone(),
+                is_cached: false,
             })
         })?;
         Ok(volumes.collect::<Result<Vec<Volume>, rusqlite::Error>>()?)
-        }   
+    }   
 
     pub fn add_volume(&self, volume: &Volume) -> Result<(), Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
@@ -267,6 +268,27 @@ impl Database {
         Ok(picture)
     }
 
+    // Helper: get chapter_id and pages for a volume
+    pub fn get_volume_chapter_and_pages(&self, volume_id: i32) -> Option<(i32, i32)> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT chapter_id, pages FROM volumes WHERE id = ?").ok()?;
+        let mut rows = stmt.query([volume_id.to_string()]).ok()?;
+        if let Some(row) = rows.next().ok()? {
+            let chapter_id: i32 = row.get(0).ok()?;
+            let pages: i32 = row.get(1).ok()?;
+            Some((chapter_id, pages))
+        } else {
+            None
+        }
+    }
+
+    // Helper: check if a picture is cached
+    pub fn is_picture_cached(&self, chapter_id: i32, page: i32) -> bool {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT count(*) FROM manga_pictures WHERE chapter_id = ? AND page = ?").unwrap();
+        let count: i32 = stmt.query_row([chapter_id.to_string(), page.to_string()], |r| r.get(0)).unwrap();
+        count > 0
+    }
 
 }
 

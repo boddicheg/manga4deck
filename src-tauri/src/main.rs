@@ -216,6 +216,15 @@ async fn unread_volume(
     (StatusCode::OK, Json(()))
 }
 
+async fn cache_serie_route(
+    Extension(kavita): Extension<SharedKavita>,
+    Path(series_id): Path<i32>
+) -> (StatusCode, Json<serde_json::Value>) {
+    let kavita_guard = kavita.lock().await;
+    kavita_guard.cache_serie(series_id);
+    (StatusCode::OK, Json(serde_json::json!({"status": "caching started", "series_id": series_id})))
+}
+
 #[tokio::main]
 async fn start_server() {
     // Create CORS layer (allow all origins and methods)
@@ -243,6 +252,7 @@ async fn start_server() {
         .route("/api/picture/{series}/{volume}/{chapter}/{page}", get(get_picture))
         .route("/api/read-volume/{series_id}/{volume_id}", get(read_volume))
         .route("/api/unread-volume/{series_id}/{volume_id}", get(unread_volume))
+        .route("/api/cache/serie/{series_id}", get(cache_serie_route))
         .layer(cors)
         .layer(Extension(kavita));
 

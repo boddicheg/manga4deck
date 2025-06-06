@@ -75,7 +75,7 @@ export interface VolumeResponseInterface {
   series_id: number;
   title: string;
   volume_id: number;
-  cached: boolean;
+  is_cached: boolean;
 }
 
 export const fetchVolumes = async (

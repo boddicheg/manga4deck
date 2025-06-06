@@ -12,6 +12,10 @@ use crate::storage::{
     Database
 };
 
+use std::sync::{Arc, Mutex as StdMutex};
+use std::thread;
+use std::collections::VecDeque;
+
 fn get_datadir() -> PathBuf {
     let home = dirs::home_dir().expect("Could not find home directory");
     
@@ -100,6 +104,9 @@ pub struct Kavita {
     pub offline_mode: bool,
     pub ip: String,
     pub api_key: String,
+    // --- Caching fields ---
+    pub caching_queue: Arc<StdMutex<VecDeque<i32>>>, // series_id queue
+    pub caching_thread_handle: Arc<StdMutex<Option<thread::JoinHandle<()>>>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -117,6 +124,7 @@ pub struct Volume {
     pub title: String,
     pub read: i32,
     pub pages: i32,
+    pub is_cached: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -155,6 +163,8 @@ impl Kavita {
             offline_mode: false,
             ip: DEFAULT_IP.to_string(),
             api_key: DEFAULT_API_KEY.to_string(),
+            caching_queue: Arc::new(StdMutex::new(VecDeque::new())),
+            caching_thread_handle: Arc::new(StdMutex::new(None)),
         };
 
         kavita
@@ -375,6 +385,7 @@ impl Kavita {
                 title: v["name"].as_str().unwrap_or("").to_string(),
                 read: v["pagesRead"].as_i64().unwrap_or(0) as i32,
                 pages: v["pages"].as_i64().unwrap_or(0) as i32,
+                is_cached: false,
             }).collect();   
             for volume in volumes {
                 self.db.add_volume(&volume)?;
@@ -390,6 +401,10 @@ impl Kavita {
         let mut volumes = self.db.get_volumes(series_id)?;
         // sort volumes by title and converted to int and return sorted volumes
         volumes.sort_by_key(|v| v.title.clone().replace(|c: char| !c.is_digit(10), "").parse::<i32>().unwrap_or(0));
+        // Update is_cached for each volume
+        for v in &mut volumes {
+            v.is_cached = self.is_volume_cached(v.id);
+        }
         Ok(volumes)
     }
 
@@ -490,5 +505,103 @@ impl Kavita {
             .send()
             .await?;    
         Ok(())
+    }
+
+    // Check if all volumes in a series are cached
+    pub fn is_series_cached(&self, series_id: i32) -> bool {
+        let volumes = self.db.get_volumes(&series_id).unwrap_or_default();
+        for volume in volumes {
+            if !self.is_volume_cached(volume.id) {
+                return false;
+            }
+        }
+        true
+    }
+
+    // Check if all pages in a volume are cached
+    pub fn is_volume_cached(&self, volume_id: i32) -> bool {
+        if let Some((chapter_id, pages)) = self.db.get_volume_chapter_and_pages(volume_id) {
+            for page in 1..=pages {
+                if !self.db.is_picture_cached(chapter_id, page) {
+                    return false;
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    // Add a series to the caching queue and start the thread if not running
+    pub fn cache_serie(&self, series_id: i32) {
+        {
+            let mut queue = self.caching_queue.lock().unwrap();
+            if !queue.contains(&series_id) {
+                queue.push_back(series_id);
+            }
+        }
+        let mut handle_guard = self.caching_thread_handle.lock().unwrap();
+        if handle_guard.is_none() {
+            let db = self.db.clone();
+            let queue = self.caching_queue.clone();
+            let ip = self.ip.clone();
+            let api_key = self.api_key.clone();
+            let token = self.token.clone();
+            *handle_guard = Some(thread::spawn(move || {
+                cache_serie_threaded(db, queue, ip, api_key, token);
+            }));
+        }
+    }
+}
+
+// Background thread for caching series
+fn cache_serie_threaded(db: Database, queue: Arc<StdMutex<VecDeque<i32>>>, ip: String, api_key: String, _token: String) {
+    use ureq;
+    use std::io::Read;
+    loop {
+        let series_id = {
+            let mut q = queue.lock().unwrap();
+            q.pop_front()
+        };
+        if let Some(series_id) = series_id {
+            let mut volumes = db.get_volumes(&series_id).unwrap_or_default();
+            // Sort volumes by the number in their title (e.g., 'Volume 20' < 'Volume 21')
+            volumes.sort_by_key(|v| {
+                let digits: String = v.title.chars().filter(|c| c.is_digit(10)).collect();
+                digits.parse::<i32>().unwrap_or(0)
+            });
+            for volume in volumes {
+                if volume.pages > 0 && volume.read >= volume.pages {
+                    continue; // Skip fully read volumes
+                }
+                info(&format!("Start caching volume {} (title: {}) in series {}", volume.id, volume.title, series_id));
+                if let Some((chapter_id, pages)) = db.get_volume_chapter_and_pages(volume.id) {
+                    for page in 1..=pages {
+                        if !db.is_picture_cached(chapter_id, page) {
+                            let url = format!("http://{}/api/reader/image?chapterId={}&apiKey={}&page={}", ip, chapter_id, api_key, page);
+                            let resp = ureq::get(&url).call();
+                            if let Ok(response) = resp {
+                                let mut bytes = Vec::new();
+                                response.into_reader().read_to_end(&mut bytes).unwrap();
+                                let hash = generate_hash_from_now();
+                                let cache_folder = get_datadir().join("manga4deck-cache").join("cache");    
+                                let filename = cache_folder.join(format!("{}.png", hash));
+                                fs::write(&filename, &bytes).unwrap();
+                                let picture = crate::kavita::MangaPicture {
+                                    chapter_id,
+                                    page,
+                                    file: filename.to_string_lossy().into_owned(),
+                                };
+                                db.add_picture(&picture).unwrap();
+                            }
+                        }
+                    }
+                }
+                info(&format!("Finished caching volume {} (title: {}) in series {}", volume.id, volume.title, series_id));
+
+            }
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
     }
 }
