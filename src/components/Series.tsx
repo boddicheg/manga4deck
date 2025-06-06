@@ -15,6 +15,7 @@ const Series: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const currentIndexRef = useRef(currentIndex);
+  const firstLoadRef = useRef(true);
 
   const fetchInterval = 1000;
 
@@ -41,6 +42,24 @@ const Series: React.FC = () => {
     try {
       const data = await fetchVolumes(id);
       setVolumes(data);
+      if (firstLoadRef.current) {
+        const lastOpenedKey = `lastOpenedVolume_${id}`;
+        const lastOpenedVolumeId = localStorage.getItem(lastOpenedKey);
+        let idx = 0;
+        if (lastOpenedVolumeId) {
+          const foundIdx = data.findIndex(v => String(v.volume_id) === lastOpenedVolumeId);
+          if (foundIdx !== -1) idx = foundIdx;
+        } else {
+          const firstUnread = data.findIndex(v => v.read < v.pages);
+          if (firstUnread !== -1) idx = firstUnread;
+          else if (data.length > 0) idx = data.length - 1;
+        }
+        setCurrentIndex(idx);
+        setTimeout(() => {
+          divRefs.current[idx]?.focus();
+        }, 0);
+        firstLoadRef.current = false;
+      }
     } catch (err) {
       if (err instanceof Error) {
         setError(err.message);
@@ -55,6 +74,10 @@ const Series: React.FC = () => {
   const enterDirectory = () => {
     const currentDiv = divRefs.current[currentIndexRef.current];
     const route = currentDiv?.getAttribute("data-route");
+    const volumeId = currentDiv?.getAttribute("data-key");
+    if (id && volumeId) {
+      localStorage.setItem(`lastOpenedVolume_${id}`, volumeId);
+    }
     navigateTo(route);
   };
 
@@ -76,7 +99,6 @@ const Series: React.FC = () => {
         navigate(-1);
         break;
       case "F1":
-        // F1 - mark volume as completed
         const readVolume = async (series_id: string | undefined, volume_id: string) => {
           if (series_id) await fetchReadVolume(series_id, volume_id);
         }
@@ -93,7 +115,6 @@ const Series: React.FC = () => {
         }
         break;
       case "F2":
-        // F2 - cache whole serie
         const startCaching = async (id: string | undefined) => {
           if (id) await fetchCacheSeries(id);
         }
