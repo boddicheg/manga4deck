@@ -150,7 +150,7 @@ const Series: React.FC = () => {
 
   return (
     <>
-      <div className="w-full h-screen bg-[#8B5E3C]">
+      <div className="w-full min-h-screen bg-[#8B5E3C]">
         <div className="text-xl text-white font-bold py-2 text-center bg-gradient-to-b from-black to-[#1a1a1a] border-b border-black shadow-md">
           Volumes
         </div>
@@ -159,7 +159,7 @@ const Series: React.FC = () => {
         </div>
 
         <div 
-          className="absolute inset-0 pointer-events-none"
+          className="fixed inset-0 z-0 pointer-events-none"
           style={{
             backgroundImage: `
               repeating-linear-gradient(
@@ -177,7 +177,8 @@ const Series: React.FC = () => {
                 transparent 4px
               )
             `,
-            opacity: 0.4
+            opacity: 0.4,
+            minHeight: '100vh',
           }}
         />
 
