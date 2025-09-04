@@ -8,6 +8,8 @@ use crate::logger::{
     info
 };
 
+use tokio::time::{timeout, Duration};
+
 use crate::storage::{
     Database
 };
@@ -160,7 +162,7 @@ impl Kavita {
             db,
             token: String::new(),
             logged_as: String::new(),
-            offline_mode: false,
+            offline_mode: true,
             ip: DEFAULT_IP.to_string(),
             api_key: DEFAULT_API_KEY.to_string(),
             caching_queue: Arc::new(StdMutex::new(VecDeque::new())),
@@ -200,30 +202,44 @@ impl Kavita {
         info(&format!("API Key: {}", api_key));
 
         // make http request to get token
-        let client = reqwest::Client::new();
-        let response = client.post(format!("http://{}/api/Account/login", self.ip))
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()?;
+        let fut = client.post(format!("http://{}/api/Account/login", self.ip))
             .json(&json!({
                 "username": username,
                 "password": password,
                 "apiKey": api_key
             }))
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            let body = response.text().await?;
-            let data: serde_json::Value = serde_json::from_str(&body)?;
-            self.token = data["token"].as_str().unwrap_or("").to_string();
-            self.logged_as = data["username"].as_str().unwrap_or("").to_string();
-            self.api_key = data["apiKey"].as_str().unwrap_or("").to_string();
-            info(&format!("Logged as: {}", self.logged_as));
-        } else {
-            self.offline_mode = true;
-            self.logged_as = "".to_string();
-            self.token = "".to_string();
-            info(&format!("Failed to get token. Now in offline mode"));
-        }
-
+            .send();
+        let response = match timeout(Duration::from_secs(5), fut).await {
+            Ok(Ok(resp)) => 
+            {
+                let body = resp.text().await.unwrap();
+                info(&format!("Body: {}", body));
+                let data: serde_json::Value = serde_json::from_str(&body)?;
+                self.token = data["token"].as_str().unwrap_or("").to_string();
+                self.logged_as = data["username"].as_str().unwrap_or("").to_string();
+                self.api_key = data["apiKey"].as_str().unwrap_or("").to_string();
+                self.offline_mode = false;
+                info(&format!("Logged as: {}", self.logged_as));
+            },
+            Ok(Err(e)) => {
+                self.offline_mode = true;
+                self.logged_as = "".to_string();
+                self.token = "".to_string();
+                info(&format!("Failed to get token. Now in offline mode"));
+                return Err(Box::new(e));
+            }
+            Err(_) => {
+                self.offline_mode = true;
+                self.logged_as = "".to_string();
+                self.token = "".to_string();
+                info(&format!("Failed to get token. Now in offline mode"));
+                return Err("Timeout".into());
+            }
+        };
+        info(&format!("reconnect_with_creds - done"));
         Ok(())
     }
 
