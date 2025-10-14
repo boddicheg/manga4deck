@@ -10,11 +10,13 @@ const Viewer: React.FC = () => {
   const navigate = useNavigate();
   const [currentPage, setCurrentPage] = useState(+read!);
   const [loadedPages, setLoadedPages] = useState<number[]>([+read!]);
-  const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState<number>(0);
+  const [upKeyCount, setUpKeyCount] = useState<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
+  const upKeyTimeoutRef = useRef<number | null>(null);
+  const scrollObserverRef = useRef<IntersectionObserver | null>(null);
 
   const getPageImage = (page: number) => {
     return "http://localhost:11337/api/picture/" + series_id + "/" + volume_id + "/" + chapter_id + "/" + page;
@@ -22,7 +24,6 @@ const Viewer: React.FC = () => {
 
   const loadImage = (page: number, isRetry: boolean = false) => {
     if (!isRetry) {
-      setLoading(true);
       setError(null);
       setRetryCount(0);
     }
@@ -42,13 +43,11 @@ const Viewer: React.FC = () => {
         }, 2000);
       } else {
         setError("Image load failed after 3 retries. The server might be unresponsive.");
-        setLoading(false);
       }
     }, timeoutDuration);
     
     img.onload = () => {
       clearTimeout(timeoutId);
-      setLoading(false);
       setError(null);
       setRetryCount(0);
     };
@@ -64,16 +63,45 @@ const Viewer: React.FC = () => {
         }, 2000);
       } else {
         setError("Failed to load image after 3 retries. The server might be offline or the image doesn't exist.");
-        setLoading(false);
       }
     };
     
     return img;
   };
 
+  // Handler for loading previous pages
+  const handleLoadPrevious = () => {
+    const firstPage = loadedPages[0];
+    if (firstPage > 0) {
+      const previousPage = firstPage - 1;
+      setLoadedPages(prev => [previousPage, ...prev]);
+      setUpKeyCount(0);
+    }
+  };
+
   const handleKey = (event: KeyboardEvent): void => {
     if (event.key === "Backspace") {
       navigate(-1);
+    } else if (event.key === "ArrowUp") {
+      // Check if user is at the top of the page
+      if (window.scrollY <= 10) {
+        setUpKeyCount(prev => prev + 1);
+        
+        // Clear existing timeout
+        if (upKeyTimeoutRef.current) {
+          clearTimeout(upKeyTimeoutRef.current);
+        }
+        
+        // Set new timeout to reset counter
+        upKeyTimeoutRef.current = setTimeout(() => {
+          setUpKeyCount(0);
+        }, 2000);
+        
+        // Load previous pages after 3 key presses
+        if (upKeyCount >= 2) {
+          handleLoadPrevious();
+        }
+      }
     }
   };
 
@@ -81,8 +109,11 @@ const Viewer: React.FC = () => {
     window.addEventListener("keydown", handleKey);
     return () => {
       window.removeEventListener("keydown", handleKey);
+      if (upKeyTimeoutRef.current) {
+        clearTimeout(upKeyTimeoutRef.current);
+      }
     };
-  }, []);
+  }, [upKeyCount]);
 
   useEffect(() => {
     const options = {
@@ -91,17 +122,38 @@ const Viewer: React.FC = () => {
       threshold: 0.1,
     };
     const handleIntersect = (entries: IntersectionObserverEntry[]) => {
+      console.log('Intersection observer triggered:', entries);
       entries.forEach((entry) => {
         if (entry.isIntersecting) {
-          const nextPage = currentPage + 1;
+          console.log('Bottom trigger is intersecting');
+          const nextPage = Math.max(...loadedPages) + 1;
+          console.log('Next page to load:', nextPage, 'Total pages:', pages);
+          console.log('Current loaded pages:', loadedPages);
+          console.log('Next page already loaded?', loadedPages.includes(nextPage));
           if (nextPage < +pages! && !loadedPages.includes(nextPage)) {
-            setLoadedPages(prev => [...prev, nextPage]);
+            console.log('Loading next page:', nextPage);
             setCurrentPage(nextPage);
+            setLoadedPages(prev => [...prev, nextPage]);
+            loadImage(nextPage);
+          } else {
+            console.log('Skipping load - either page already loaded or no more pages');
           }
         }
       });
     };
     observerRef.current = new IntersectionObserver(handleIntersect, options);
+    
+    // Try to observe the trigger element after a short delay
+    setTimeout(() => {
+      const trigger = document.querySelector('[data-bottom-trigger]');
+      if (trigger && observerRef.current) {
+        observerRef.current.observe(trigger);
+        console.log('Bottom trigger connected to observer');
+      } else {
+        console.log('Bottom trigger not found or observer not ready');
+      }
+    }, 100);
+    
     return () => {
       if (observerRef.current) {
         observerRef.current.disconnect();
@@ -109,37 +161,54 @@ const Viewer: React.FC = () => {
     };
   }, [currentPage, pages, loadedPages]);
 
-  // Handler for loading previous 5 images
-  const handleLoadPrevious = () => {
-    const firstPage = loadedPages[0];
-    if (firstPage > 0) {
-      const start = Math.max(0, firstPage - 5);
-      const newPages: number[] = [];
-      for (let i = start; i < firstPage; i++) {
-        newPages.push(i);
+  // Observer to track which page is currently in view
+  useEffect(() => {
+    const options = {
+      root: null,
+      rootMargin: "-20% 0px -20% 0px", // Only trigger when page is in center 60% of viewport
+      threshold: 0.5,
+    };
+    
+    const handlePageIntersect = (entries: IntersectionObserverEntry[]) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          const pageNumber = parseInt(entry.target.getAttribute('data-page') || '0');
+          setCurrentPage(pageNumber);
+        }
+      });
+    };
+    
+    scrollObserverRef.current = new IntersectionObserver(handlePageIntersect, options);
+    
+    // Observe all loaded pages
+    const pageElements = document.querySelectorAll('[data-page]');
+    pageElements.forEach(el => {
+      if (scrollObserverRef.current) {
+        scrollObserverRef.current.observe(el);
       }
-      setLoadedPages(prev => [...newPages, ...prev]);
-    }
-  };
+    });
+    
+    return () => {
+      if (scrollObserverRef.current) {
+        scrollObserverRef.current.disconnect();
+      }
+    };
+  }, [loadedPages]);
 
   return (
     <div className="w-full h-full bg-zinc-900 min-w-[1280px] min-h-[800px] overflow-y-auto" ref={containerRef}>
       <div className="max-w-[800px] mx-auto">
-        <div className="text-white mb-3 text-center sticky top-0 bg-zinc-900 py-2 z-10">
-          {/* Show button only if first loaded page is not 0 */}
-          {loadedPages[0] > 0 && (
-            <button
-              onClick={handleLoadPrevious}
-              className="mb-2 bg-blue-600 hover:bg-blue-800 text-white font-bold py-2 px-4 rounded"
-            >
-              Load previous 5 pages
-            </button>
-          )}
-          <div>Page {currentPage} / {pages}</div>
-        </div>
+        {/* Previous page loading prompt */}
+        {loadedPages[0] > 0 && (
+          <div className="text-center mb-4 bg-blue-600 text-white px-4 py-2 rounded-lg shadow-lg">
+            {upKeyCount === 0 && "Press ↑ 3 times to load previous pages"}
+            {upKeyCount === 1 && "Press ↑ 2 more times"}
+            {upKeyCount === 2 && "Press ↑ 1 more time"}
+          </div>
+        )}
         
         {loadedPages.map((page) => (
-          <div key={page} className="mb-4">
+          <div key={page} className="mb-4 relative" data-page={page}>
             <img
               src={getPageImage(page)}
               alt={`Page ${page}`}
@@ -150,14 +219,43 @@ const Viewer: React.FC = () => {
                 }
               }}
             />
+            {/* Page number overlay */}
+            <div className="absolute top-2 right-2 bg-black bg-opacity-50 text-white text-sm px-2 py-1 rounded">
+              {page + 1}/{pages}
+            </div>
           </div>
         ))}
 
-        {loading && (
-          <div className="text-white text-center mb-4">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"></div>
-            <div className="mt-2">
-              {retryCount > 0 ? `Retrying... (${retryCount}/3)` : "Loading next page..."}
+
+        {/* Progress indicator and invisible trigger */}
+        {loadedPages.length < +pages! && (
+          <div className="text-center mb-8 py-4">
+            <div className="text-gray-400 text-sm mb-2">
+              Scroll down to load more pages ({loadedPages.length} / {pages} loaded)
+            </div>
+            <div 
+              className="h-1 w-full"
+              data-bottom-trigger
+              ref={(el) => {
+                if (el && observerRef.current) {
+                  observerRef.current.observe(el);
+                  console.log('Trigger element connected to observer');
+                } else {
+                  console.log('Trigger element or observer not ready:', { el: !!el, observer: !!observerRef.current });
+                }
+              }}
+            />
+          </div>
+        )}
+
+        {/* Completion indicator */}
+        {loadedPages.length >= +pages! && (
+          <div className="text-center mb-8 py-4">
+            <div className="text-green-400 text-sm flex items-center justify-center">
+              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              All pages loaded ({loadedPages.length} / {pages})
             </div>
           </div>
         )}
