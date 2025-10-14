@@ -3,7 +3,6 @@
 
 use std::fs::File;
 use std::io::Read;
-use axum::response::Response;
 
 mod logger;
 use logger::{   
@@ -24,6 +23,7 @@ use kavita::{
 };
 
 mod storage;
+mod fallback_html;
 
 use axum::{
     routing::{get, post},
@@ -31,7 +31,10 @@ use axum::{
     http::StatusCode,
     Json,
     extract::Extension,
-    extract::Path
+    extract::Path,
+    response::Html,
+    response::Response,
+    body::Body
 };
 use tower_http::cors::{Any, CorsLayer};
 use serde::Serialize;
@@ -39,7 +42,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 // const APP_NAME: &str = "manga4deck";
-const KAVITA_IP: &str = "127.0.0.1:11337";
+const KAVITA_IP: &str = "0.0.0.0:11337";
 
 #[tauri::command]
 fn exit_app() {
@@ -225,6 +228,12 @@ async fn cache_serie_route(
     (StatusCode::OK, Json(serde_json::json!({"status": "caching started", "series_id": series_id})))
 }
 
+async fn serve_frontend() -> Result<Html<String>, StatusCode> {
+    // Always serve the fallback HTML form
+    info("Serving fallback HTML form");
+    Ok(Html(fallback_html::get_fallback_html().to_string()))
+}
+
 #[tokio::main]
 async fn start_server() {
     // Create CORS layer (allow all origins and methods)
@@ -238,6 +247,7 @@ async fn start_server() {
         .allow_headers(Any);
 
     let app = Router::new()
+        .route("/", get(serve_frontend))
         .route("/api/logs", get(get_logs))
         .route("/api/status", get(get_status))
         .route("/api/server-settings", get(get_server_settings))

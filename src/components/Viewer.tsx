@@ -12,6 +12,7 @@ const Viewer: React.FC = () => {
   const [loadedPages, setLoadedPages] = useState<number[]>([+read!]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
 
@@ -19,25 +20,54 @@ const Viewer: React.FC = () => {
     return "http://localhost:11337/api/picture/" + series_id + "/" + volume_id + "/" + chapter_id + "/" + page;
   };
 
-  const loadImage = (page: number) => {
-    setLoading(true);
-    setError(null);
+  const loadImage = (page: number, isRetry: boolean = false) => {
+    if (!isRetry) {
+      setLoading(true);
+      setError(null);
+      setRetryCount(0);
+    }
     
     const img = new Image();
     img.src = getPageImage(page);
-    img.onload = () => {
-      setLoading(false);
-    };
-    img.onerror = () => {
-      setError("Failed to load image. The server might be offline or the image doesn't exist.");
-      setLoading(false);
-    };
-    setTimeout(() => {
-      if (loading) {
-        setError("Image load timed out. The server might be unresponsive.");
+    
+    // Create a timeout reference with longer timeout for retries
+    const timeoutDuration = isRetry ? 15000 : 10000;
+    const timeoutId = setTimeout(() => {
+      if (retryCount < 3) {
+        setRetryCount(prev => prev + 1);
+        setError(`Image load timed out. Retrying... (${retryCount + 1}/3)`);
+        // Auto-retry after a short delay
+        setTimeout(() => {
+          loadImage(page, true);
+        }, 2000);
+      } else {
+        setError("Image load failed after 3 retries. The server might be unresponsive.");
         setLoading(false);
       }
-    }, 10000);
+    }, timeoutDuration);
+    
+    img.onload = () => {
+      clearTimeout(timeoutId);
+      setLoading(false);
+      setError(null);
+      setRetryCount(0);
+    };
+    
+    img.onerror = () => {
+      clearTimeout(timeoutId);
+      if (retryCount < 3) {
+        setRetryCount(prev => prev + 1);
+        setError(`Failed to load image. Retrying... (${retryCount + 1}/3)`);
+        // Auto-retry after a short delay
+        setTimeout(() => {
+          loadImage(page, true);
+        }, 2000);
+      } else {
+        setError("Failed to load image after 3 retries. The server might be offline or the image doesn't exist.");
+        setLoading(false);
+      }
+    };
+    
     return img;
   };
 
@@ -126,7 +156,9 @@ const Viewer: React.FC = () => {
         {loading && (
           <div className="text-white text-center mb-4">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"></div>
-            <div className="mt-2">Loading next page...</div>
+            <div className="mt-2">
+              {retryCount > 0 ? `Retrying... (${retryCount}/3)` : "Loading next page..."}
+            </div>
           </div>
         )}
 
@@ -135,7 +167,10 @@ const Viewer: React.FC = () => {
             Error: {error}
             <div className="mt-2">
               <button 
-                onClick={() => loadImage(currentPage)} 
+                onClick={() => {
+                  setRetryCount(0);
+                  loadImage(currentPage);
+                }} 
                 className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
               >
                 Retry
