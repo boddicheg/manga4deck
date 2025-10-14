@@ -10,7 +10,6 @@ const Viewer: React.FC = () => {
   const navigate = useNavigate();
   const [currentPage, setCurrentPage] = useState(+read!);
   const [loadedPages, setLoadedPages] = useState<number[]>([+read!]);
-  const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -22,7 +21,6 @@ const Viewer: React.FC = () => {
 
   const loadImage = (page: number, isRetry: boolean = false) => {
     if (!isRetry) {
-      setLoading(true);
       setError(null);
       setRetryCount(0);
     }
@@ -42,13 +40,11 @@ const Viewer: React.FC = () => {
         }, 2000);
       } else {
         setError("Image load failed after 3 retries. The server might be unresponsive.");
-        setLoading(false);
       }
     }, timeoutDuration);
     
     img.onload = () => {
       clearTimeout(timeoutId);
-      setLoading(false);
       setError(null);
       setRetryCount(0);
     };
@@ -64,7 +60,6 @@ const Viewer: React.FC = () => {
         }, 2000);
       } else {
         setError("Failed to load image after 3 retries. The server might be offline or the image doesn't exist.");
-        setLoading(false);
       }
     };
     
@@ -91,17 +86,38 @@ const Viewer: React.FC = () => {
       threshold: 0.1,
     };
     const handleIntersect = (entries: IntersectionObserverEntry[]) => {
+      console.log('Intersection observer triggered:', entries);
       entries.forEach((entry) => {
         if (entry.isIntersecting) {
-          const nextPage = currentPage + 1;
+          console.log('Bottom trigger is intersecting');
+          const nextPage = Math.max(...loadedPages) + 1;
+          console.log('Next page to load:', nextPage, 'Total pages:', pages);
+          console.log('Current loaded pages:', loadedPages);
+          console.log('Next page already loaded?', loadedPages.includes(nextPage));
           if (nextPage < +pages! && !loadedPages.includes(nextPage)) {
-            setLoadedPages(prev => [...prev, nextPage]);
+            console.log('Loading next page:', nextPage);
             setCurrentPage(nextPage);
+            setLoadedPages(prev => [...prev, nextPage]);
+            loadImage(nextPage);
+          } else {
+            console.log('Skipping load - either page already loaded or no more pages');
           }
         }
       });
     };
     observerRef.current = new IntersectionObserver(handleIntersect, options);
+    
+    // Try to observe the trigger element after a short delay
+    setTimeout(() => {
+      const trigger = document.querySelector('[data-bottom-trigger]');
+      if (trigger && observerRef.current) {
+        observerRef.current.observe(trigger);
+        console.log('Bottom trigger connected to observer');
+      } else {
+        console.log('Bottom trigger not found or observer not ready');
+      }
+    }, 100);
+    
     return () => {
       if (observerRef.current) {
         observerRef.current.disconnect();
@@ -153,11 +169,36 @@ const Viewer: React.FC = () => {
           </div>
         ))}
 
-        {loading && (
-          <div className="text-white text-center mb-4">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"></div>
-            <div className="mt-2">
-              {retryCount > 0 ? `Retrying... (${retryCount}/3)` : "Loading next page..."}
+
+        {/* Progress indicator and invisible trigger */}
+        {loadedPages.length < +pages! && (
+          <div className="text-center mb-8 py-4">
+            <div className="text-gray-400 text-sm mb-2">
+              Scroll down to load more pages ({loadedPages.length} / {pages} loaded)
+            </div>
+            <div 
+              className="h-1 w-full"
+              data-bottom-trigger
+              ref={(el) => {
+                if (el && observerRef.current) {
+                  observerRef.current.observe(el);
+                  console.log('Trigger element connected to observer');
+                } else {
+                  console.log('Trigger element or observer not ready:', { el: !!el, observer: !!observerRef.current });
+                }
+              }}
+            />
+          </div>
+        )}
+
+        {/* Completion indicator */}
+        {loadedPages.length >= +pages! && (
+          <div className="text-center mb-8 py-4">
+            <div className="text-green-400 text-sm flex items-center justify-center">
+              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              All pages loaded ({loadedPages.length} / {pages})
             </div>
           </div>
         )}
