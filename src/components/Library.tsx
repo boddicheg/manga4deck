@@ -15,6 +15,7 @@ const Library: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const currentIndexRef = useRef(currentIndex);
+  const firstLoadRef = useRef(true);
 
   const navigate = useNavigate();
   const navigateTo = (uri: string | null | undefined) => {
@@ -39,6 +40,20 @@ const Library: React.FC = () => {
     try {
       const data = await fetchSeries(id);
       setSeries(data);
+      if (firstLoadRef.current) {
+        const lastOpenedKey = `lastOpenedSeries`;
+        const lastOpenedSeriesId = localStorage.getItem(lastOpenedKey);
+        let idx = 0;
+        if (lastOpenedSeriesId) {
+          const foundIdx = data.findIndex(s => String(s.id) === lastOpenedSeriesId);
+          if (foundIdx !== -1) idx = foundIdx;
+        }
+        setCurrentIndex(idx);
+        setTimeout(() => {
+          divRefs.current[idx]?.focus();
+        }, 0);
+        firstLoadRef.current = false;
+      }
     } catch (err) {
       if (err instanceof Error) {
         setError(err.message);
@@ -53,6 +68,10 @@ const Library: React.FC = () => {
   const enterDirectory = () => {
     const currentDiv = divRefs.current[currentIndexRef.current];
     const route = currentDiv?.getAttribute("data-route");
+    const seriesId = currentDiv?.getAttribute("data-route")?.split("/").pop();
+    if (seriesId) {
+      localStorage.setItem(`lastOpenedSeries`, seriesId);
+    }
     navigateTo(route);
   };
 

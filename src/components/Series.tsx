@@ -15,6 +15,7 @@ const Series: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const currentIndexRef = useRef(currentIndex);
+  const firstLoadRef = useRef(true);
 
   const fetchInterval = 1000;
 
@@ -41,6 +42,24 @@ const Series: React.FC = () => {
     try {
       const data = await fetchVolumes(id);
       setVolumes(data);
+      if (firstLoadRef.current) {
+        const lastOpenedKey = `lastOpenedVolume_${id}`;
+        const lastOpenedVolumeId = localStorage.getItem(lastOpenedKey);
+        let idx = 0;
+        if (lastOpenedVolumeId) {
+          const foundIdx = data.findIndex(v => String(v.volume_id) === lastOpenedVolumeId);
+          if (foundIdx !== -1) idx = foundIdx;
+        } else {
+          const firstUnread = data.findIndex(v => v.read < v.pages);
+          if (firstUnread !== -1) idx = firstUnread;
+          else if (data.length > 0) idx = data.length - 1;
+        }
+        setCurrentIndex(idx);
+        setTimeout(() => {
+          divRefs.current[idx]?.focus();
+        }, 0);
+        firstLoadRef.current = false;
+      }
     } catch (err) {
       if (err instanceof Error) {
         setError(err.message);
@@ -55,6 +74,10 @@ const Series: React.FC = () => {
   const enterDirectory = () => {
     const currentDiv = divRefs.current[currentIndexRef.current];
     const route = currentDiv?.getAttribute("data-route");
+    const volumeId = currentDiv?.getAttribute("data-key");
+    if (id && volumeId) {
+      localStorage.setItem(`lastOpenedVolume_${id}`, volumeId);
+    }
     navigateTo(route);
   };
 
@@ -76,7 +99,6 @@ const Series: React.FC = () => {
         navigate(-1);
         break;
       case "F1":
-        // F1 - mark volume as completed
         const readVolume = async (series_id: string | undefined, volume_id: string) => {
           if (series_id) await fetchReadVolume(series_id, volume_id);
         }
@@ -93,7 +115,6 @@ const Series: React.FC = () => {
         }
         break;
       case "F2":
-        // F2 - cache whole serie
         const startCaching = async (id: string | undefined) => {
           if (id) await fetchCacheSeries(id);
         }
@@ -129,7 +150,7 @@ const Series: React.FC = () => {
 
   return (
     <>
-      <div className="w-full h-screen bg-[#8B5E3C]">
+      <div className="w-full min-h-screen bg-[#8B5E3C]">
         <div className="text-xl text-white font-bold py-2 text-center bg-gradient-to-b from-black to-[#1a1a1a] border-b border-black shadow-md">
           Volumes
         </div>
@@ -138,7 +159,7 @@ const Series: React.FC = () => {
         </div>
 
         <div 
-          className="absolute inset-0 pointer-events-none"
+          className="fixed inset-0 z-0 pointer-events-none"
           style={{
             backgroundImage: `
               repeating-linear-gradient(
@@ -156,7 +177,8 @@ const Series: React.FC = () => {
                 transparent 4px
               )
             `,
-            opacity: 0.4
+            opacity: 0.4,
+            minHeight: '100vh',
           }}
         />
 
@@ -240,7 +262,7 @@ const Series: React.FC = () => {
                     className={`h-full ${
                       volume.read === volume.pages
                         ? "bg-green-500"
-                        : volume.cached 
+                        : volume.is_cached 
                         ? "bg-yellow-500"
                         : "bg-blue-500"
                     }`}
@@ -256,7 +278,7 @@ const Series: React.FC = () => {
                   style={{
                     background: volume.read === volume.pages
                       ? 'rgba(4, 120, 87, 0.7)'
-                      : volume.cached
+                      : volume.is_cached
                       ? 'rgba(245, 158, 11, 0.7)'
                       : 'rgba(0, 0, 0, 0.7)',
                     backdropFilter: 'blur(5px)',
@@ -270,7 +292,11 @@ const Series: React.FC = () => {
                 >
                   <div 
                     className={`text-sm whitespace-nowrap text-center ${
-                      currentIndex === index ? "text-gray-300" : "text-white truncate"
+                      volume.is_cached
+                        ? 'text-black'
+                        : currentIndex === index
+                        ? 'text-gray-300'
+                        : 'text-white truncate'
                     }`}
                     ref={(el) => {
                       if (el) {
