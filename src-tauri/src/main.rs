@@ -3,7 +3,6 @@
 
 use std::fs::File;
 use std::io::Read;
-use axum::response::Response;
 
 mod logger;
 use logger::{   
@@ -24,6 +23,7 @@ use kavita::{
 };
 
 mod storage;
+mod fallback_html;
 
 use axum::{
     routing::{get, post},
@@ -32,9 +32,10 @@ use axum::{
     Json,
     extract::Extension,
     extract::Path,
-    response::Html
+    response::Html,
+    response::Response,
+    body::Body
 };
-use tower_http::services::ServeDir;
 use tower_http::cors::{Any, CorsLayer};
 use serde::Serialize;
 use std::sync::Arc;
@@ -227,8 +228,10 @@ async fn cache_serie_route(
     (StatusCode::OK, Json(serde_json::json!({"status": "caching started", "series_id": series_id})))
 }
 
-async fn serve_frontend() -> Html<&'static str> {
-    Html(include_str!("../../dist/index.html"))
+async fn serve_frontend() -> Result<Html<String>, StatusCode> {
+    // Always serve the fallback HTML form
+    info("Serving fallback HTML form");
+    Ok(Html(fallback_html::get_fallback_html().to_string()))
 }
 
 #[tokio::main]
@@ -245,7 +248,6 @@ async fn start_server() {
 
     let app = Router::new()
         .route("/", get(serve_frontend))
-        .nest_service("/assets", ServeDir::new("../dist/assets"))
         .route("/api/logs", get(get_logs))
         .route("/api/status", get(get_status))
         .route("/api/server-settings", get(get_server_settings))
