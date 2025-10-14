@@ -155,7 +155,7 @@ const Viewer: React.FC = () => {
         </div>
         
         {loadedPages.map((page) => (
-          <div key={page} className="mb-4">
+          <div key={page} className="mb-4 relative">
             <img
               src={getPageImage(page)}
               alt={`Page ${page}`}
@@ -166,6 +166,10 @@ const Viewer: React.FC = () => {
                 }
               }}
             />
+            {/* Page number overlay */}
+            <div className="absolute top-2 right-2 bg-black bg-opacity-50 text-white text-sm px-2 py-1 rounded">
+              {page + 1}/{pages}
+            </div>
           </div>
         ))}
 
