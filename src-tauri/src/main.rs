@@ -31,15 +31,17 @@ use axum::{
     http::StatusCode,
     Json,
     extract::Extension,
-    extract::Path
+    extract::Path,
+    response::Html
 };
+use tower_http::services::ServeDir;
 use tower_http::cors::{Any, CorsLayer};
 use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 // const APP_NAME: &str = "manga4deck";
-const KAVITA_IP: &str = "127.0.0.1:11337";
+const KAVITA_IP: &str = "0.0.0.0:11337";
 
 #[tauri::command]
 fn exit_app() {
@@ -225,6 +227,10 @@ async fn cache_serie_route(
     (StatusCode::OK, Json(serde_json::json!({"status": "caching started", "series_id": series_id})))
 }
 
+async fn serve_frontend() -> Html<&'static str> {
+    Html(include_str!("../../dist/index.html"))
+}
+
 #[tokio::main]
 async fn start_server() {
     // Create CORS layer (allow all origins and methods)
@@ -238,6 +244,8 @@ async fn start_server() {
         .allow_headers(Any);
 
     let app = Router::new()
+        .route("/", get(serve_frontend))
+        .nest_service("/assets", ServeDir::new("../dist/assets"))
         .route("/api/logs", get(get_logs))
         .route("/api/status", get(get_status))
         .route("/api/server-settings", get(get_server_settings))
