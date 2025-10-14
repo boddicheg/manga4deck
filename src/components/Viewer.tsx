@@ -12,8 +12,11 @@ const Viewer: React.FC = () => {
   const [loadedPages, setLoadedPages] = useState<number[]>([+read!]);
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState<number>(0);
+  const [upKeyCount, setUpKeyCount] = useState<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
+  const upKeyTimeoutRef = useRef<number | null>(null);
+  const scrollObserverRef = useRef<IntersectionObserver | null>(null);
 
   const getPageImage = (page: number) => {
     return "http://localhost:11337/api/picture/" + series_id + "/" + volume_id + "/" + chapter_id + "/" + page;
@@ -66,9 +69,39 @@ const Viewer: React.FC = () => {
     return img;
   };
 
+  // Handler for loading previous pages
+  const handleLoadPrevious = () => {
+    const firstPage = loadedPages[0];
+    if (firstPage > 0) {
+      const previousPage = firstPage - 1;
+      setLoadedPages(prev => [previousPage, ...prev]);
+      setUpKeyCount(0);
+    }
+  };
+
   const handleKey = (event: KeyboardEvent): void => {
     if (event.key === "Backspace") {
       navigate(-1);
+    } else if (event.key === "ArrowUp") {
+      // Check if user is at the top of the page
+      if (window.scrollY <= 10) {
+        setUpKeyCount(prev => prev + 1);
+        
+        // Clear existing timeout
+        if (upKeyTimeoutRef.current) {
+          clearTimeout(upKeyTimeoutRef.current);
+        }
+        
+        // Set new timeout to reset counter
+        upKeyTimeoutRef.current = setTimeout(() => {
+          setUpKeyCount(0);
+        }, 2000);
+        
+        // Load previous pages after 3 key presses
+        if (upKeyCount >= 2) {
+          handleLoadPrevious();
+        }
+      }
     }
   };
 
@@ -76,8 +109,11 @@ const Viewer: React.FC = () => {
     window.addEventListener("keydown", handleKey);
     return () => {
       window.removeEventListener("keydown", handleKey);
+      if (upKeyTimeoutRef.current) {
+        clearTimeout(upKeyTimeoutRef.current);
+      }
     };
-  }, []);
+  }, [upKeyCount]);
 
   useEffect(() => {
     const options = {
@@ -125,37 +161,54 @@ const Viewer: React.FC = () => {
     };
   }, [currentPage, pages, loadedPages]);
 
-  // Handler for loading previous 5 images
-  const handleLoadPrevious = () => {
-    const firstPage = loadedPages[0];
-    if (firstPage > 0) {
-      const start = Math.max(0, firstPage - 5);
-      const newPages: number[] = [];
-      for (let i = start; i < firstPage; i++) {
-        newPages.push(i);
+  // Observer to track which page is currently in view
+  useEffect(() => {
+    const options = {
+      root: null,
+      rootMargin: "-20% 0px -20% 0px", // Only trigger when page is in center 60% of viewport
+      threshold: 0.5,
+    };
+    
+    const handlePageIntersect = (entries: IntersectionObserverEntry[]) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          const pageNumber = parseInt(entry.target.getAttribute('data-page') || '0');
+          setCurrentPage(pageNumber);
+        }
+      });
+    };
+    
+    scrollObserverRef.current = new IntersectionObserver(handlePageIntersect, options);
+    
+    // Observe all loaded pages
+    const pageElements = document.querySelectorAll('[data-page]');
+    pageElements.forEach(el => {
+      if (scrollObserverRef.current) {
+        scrollObserverRef.current.observe(el);
       }
-      setLoadedPages(prev => [...newPages, ...prev]);
-    }
-  };
+    });
+    
+    return () => {
+      if (scrollObserverRef.current) {
+        scrollObserverRef.current.disconnect();
+      }
+    };
+  }, [loadedPages]);
 
   return (
     <div className="w-full h-full bg-zinc-900 min-w-[1280px] min-h-[800px] overflow-y-auto" ref={containerRef}>
       <div className="max-w-[800px] mx-auto">
-        <div className="text-white mb-3 text-center sticky top-0 bg-zinc-900 py-2 z-10">
-          {/* Show button only if first loaded page is not 0 */}
-          {loadedPages[0] > 0 && (
-            <button
-              onClick={handleLoadPrevious}
-              className="mb-2 bg-blue-600 hover:bg-blue-800 text-white font-bold py-2 px-4 rounded"
-            >
-              Load previous 5 pages
-            </button>
-          )}
-          <div>Page {currentPage} / {pages}</div>
-        </div>
+        {/* Previous page loading prompt */}
+        {loadedPages[0] > 0 && (
+          <div className="text-center mb-4 bg-blue-600 text-white px-4 py-2 rounded-lg shadow-lg">
+            {upKeyCount === 0 && "Press ↑ 3 times to load previous pages"}
+            {upKeyCount === 1 && "Press ↑ 2 more times"}
+            {upKeyCount === 2 && "Press ↑ 1 more time"}
+          </div>
+        )}
         
         {loadedPages.map((page) => (
-          <div key={page} className="mb-4 relative">
+          <div key={page} className="mb-4 relative" data-page={page}>
             <img
               src={getPageImage(page)}
               alt={`Page ${page}`}
