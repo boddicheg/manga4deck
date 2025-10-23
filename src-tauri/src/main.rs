@@ -237,7 +237,7 @@ async fn serve_frontend() -> Result<Html<String>, StatusCode> {
 #[tokio::main]
 async fn start_server() {
     // Print app version and Tauri version on startup
-    info("🚀 Manga4Deck v0.5.8 - Starting up...");
+    info("🚀 Manga4Deck v0.5.9 - Starting up...");
     info(&format!("📦 Tauri version: {}", tauri::VERSION));
     
     // Create CORS layer (allow all origins and methods)
