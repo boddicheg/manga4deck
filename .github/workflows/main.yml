@@ -74,7 +74,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - name: install tauri-cli experimental app image
-        run: cargo install tauri-cli --git https://github.com/tauri-apps/tauri.git --branch feat/truly-portable-appimage
+        run: |
+          TAURI_TOOLKIT_PATH="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"
+          mkdir -p "$TAURI_TOOLKIT_PATH"
+          wget https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20250213-2/linuxdeploy-x86_64.AppImage -O "$TAURI_TOOLKIT_PATH/linuxdeploy-x86_64.AppImage"
+          chmod +x "$TAURI_TOOLKIT_PATH/linuxdeploy-x86_64.AppImage"
+          ls $TAURI_TOOLKIT_PATH
       - name: install frontend dependencies
         run: npm install
       - uses: tauri-apps/tauri-action@v0
