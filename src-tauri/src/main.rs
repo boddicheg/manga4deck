@@ -237,7 +237,7 @@ async fn serve_frontend() -> Result<Html<String>, StatusCode> {
 #[tokio::main]
 async fn start_server() {
     // Print app version on startup
-    info("🚀 Manga4Deck v0.5.5 - Starting up...");
+    info("🚀 Manga4Deck v0.5.6 - Starting up...");
     
     // Create CORS layer (allow all origins and methods)
     let mut kavita = Kavita::new();
