@@ -236,6 +236,9 @@ async fn serve_frontend() -> Result<Html<String>, StatusCode> {
 
 #[tokio::main]
 async fn start_server() {
+    // Print app version on startup
+    info("🚀 Manga4Deck v0.5.5 - Starting up...");
+    
     // Create CORS layer (allow all origins and methods)
     let mut kavita = Kavita::new();
     let _ = kavita.reconnect_with_creds().await;
@@ -273,6 +276,22 @@ async fn start_server() {
 }
 
 fn main() {
+    // Set environment variables for Steam Deck compatibility
+    std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+    std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    std::env::set_var("WEBKIT_USE_SINGLE_WEB_PROCESS", "1");
+    std::env::set_var("WEBKIT_DISABLE_WEB_SECURITY", "1");
+    std::env::set_var("WEBKIT_DISABLE_GPU_PROCESS", "1");
+    
+    // Set display environment for Steam Deck
+    if std::env::var("DISPLAY").is_err() {
+        std::env::set_var("DISPLAY", ":0");
+    }
+    
+    // Set Wayland environment variables
+    std::env::set_var("WAYLAND_DISPLAY", "");
+    std::env::set_var("XDG_SESSION_TYPE", "x11");
+    
     tauri::Builder::default()
         .setup(|_| {
             std::thread::spawn(|| {

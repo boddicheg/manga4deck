@@ -14,7 +14,14 @@
       {
         "title": "Manga4Deck",
         "width": 1280,
-        "height": 800
+        "height": 800,
+        "decorations": true,
+        "resizable": true,
+        "fullscreen": false,
+        "alwaysOnTop": false,
+        "visible": true,
+        "transparent": false,
+        "skipTaskbar": false
       }
     ],
     "security": {
