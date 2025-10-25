@@ -191,7 +191,14 @@ async fn get_picture(
     // info(&format!("Getting picture for series: {}, volume: {}, chapter: {}, page: {}", series_id, volume_id, chapter_id, page));
     let kavita_guard = kavita.lock().await;
     let picture = kavita_guard.get_picture(&chapter_id, &page).await.unwrap();
-    kavita_guard.save_progress(&ReadProgress { series_id, volume_id, chapter_id, page }).await.unwrap();
+    kavita_guard.save_progress(&ReadProgress { 
+        id: None, 
+        library_id: 0, // TODO: Get actual library_id from series
+        series_id, 
+        volume_id, 
+        chapter_id, 
+        page 
+    }).await.unwrap();
 
     let mut file = File::open(picture).unwrap();
     let mut buffer = Vec::new();

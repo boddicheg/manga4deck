@@ -144,6 +144,8 @@ pub struct MangaPicture {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ReadProgress {
+    pub id: Option<i32>,
+    pub library_id: i32,
     pub series_id: i32,
     pub volume_id: i32,
     pub chapter_id: i32,
@@ -201,7 +203,7 @@ impl Kavita {
         info(&format!("Password: {}", password));
         info(&format!("API Key: {}", api_key));
 
-        self.ip = "192.168.1.100:5001".to_string();
+        // self.ip = "192.168.1.100:5001".to_string();
 
         // make http request to get token
         let client = reqwest::Client::builder()
@@ -214,7 +216,7 @@ impl Kavita {
                 "apiKey": api_key
             }))
             .send();
-        let response = match timeout(Duration::from_secs(5), fut).await {
+        match timeout(Duration::from_secs(5), fut).await {
             Ok(Ok(resp)) => 
             {
                 let body = resp.text().await.unwrap();
@@ -242,6 +244,15 @@ impl Kavita {
             }
         };
         info(&format!("reconnect_with_creds - done"));
+        
+        // Upload any offline progress now that we're online
+        if !self.offline_mode {
+            info("Attempting to upload offline progress...");
+            if let Err(e) = self.upload_progress().await {
+                info(&format!("Failed to upload offline progress: {}", e));
+            }
+        }
+        
         Ok(())
     }
 
@@ -490,8 +501,9 @@ impl Kavita {
     // -------------------------------------------------------------------------
     // Read Progress methods
     pub async fn save_progress(&self, progress: &ReadProgress) -> Result<(), Box<dyn std::error::Error>> {
-        let url = format!("http://{}/api/reader/progress", self.ip);
         if !self.offline_mode {
+            // Online mode: send to remote server
+            let url = format!("http://{}/api/reader/progress", self.ip);
             let client = reqwest::Client::new();
             let _ = client.post(url)
                 .header("Authorization", format!("Bearer {}", self.token))
@@ -503,7 +515,69 @@ impl Kavita {
                 }))
                 .send()
                 .await?;
+        } else {
+            // Offline mode: save to local database
+            info(&format!("Saving progress offline: series_id={}, volume_id={}, chapter_id={}, page={}", 
+                progress.series_id, progress.volume_id, progress.chapter_id, progress.page));
+            self.db.add_read_progress(progress)?;            
+            // Update volume read pages in offline mode
+            if let Ok(Some(mut volume)) = self.db.get_volume_by_id(progress.volume_id) {
+                // Update the read pages count for this volume
+                volume.read = progress.page;
+                self.db.add_volume(&volume)?;
+                info(&format!("Updated volume {} read pages to {}", volume.id, volume.read));
+            }
         }
+        Ok(())
+    }
+
+    pub async fn upload_progress(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.offline_mode {
+            info("Cannot upload progress: currently in offline mode");
+            return Ok(());
+        }
+
+        info("Uploading offline progress to server...");
+        let all_progress = self.db.get_all_read_progress()?;
+        let progress_count = all_progress.len();
+        
+        for progress in &all_progress {
+            let url = format!("http://{}/api/reader/progress", self.ip);
+            let client = reqwest::Client::new();
+            let response = client.post(&url)
+                .header("Authorization", format!("Bearer {}", self.token))
+                .json(&json!({
+                    "seriesId": progress.series_id,
+                    "volumeId": progress.volume_id,
+                    "chapterId": progress.chapter_id,
+                    "pageNum": progress.page,
+                }))
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        info(&format!("Successfully uploaded progress for series_id={}, page={}", 
+                            progress.series_id, progress.page));
+                    } else {
+                        info(&format!("Failed to upload progress for series_id={}, page={}: status {}", 
+                            progress.series_id, progress.page, resp.status()));
+                    }
+                }
+                Err(e) => {
+                    info(&format!("Error uploading progress for series_id={}, page={}: {}", 
+                        progress.series_id, progress.page, e));
+                }
+            }
+        }
+
+        // Clear local progress after successful upload
+        if progress_count > 0 {
+            info(&format!("Clearing {} offline progress entries", progress_count));
+            self.db.clear_read_progress()?;
+        }
+
         Ok(())
     } 
 
