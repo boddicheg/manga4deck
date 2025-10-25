@@ -201,6 +201,8 @@ impl Kavita {
         info(&format!("Password: {}", password));
         info(&format!("API Key: {}", api_key));
 
+        self.ip = "192.168.1.100:5001".to_string();
+
         // make http request to get token
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
@@ -349,6 +351,10 @@ impl Kavita {
             self.pull_series(library_id).await?;
         }
         let mut series = self.db.get_series(library_id)?;
+        // return only cached series
+        if self.offline_mode {
+            series = series.into_iter().filter(|s| !self.is_series_cached(s.id)).collect();
+        }
         // sort series by title and return sorted series
         series.sort_by_key(|s| s.title.clone());
         Ok(series)
@@ -374,6 +380,9 @@ impl Kavita {
                 file: filename.to_string_lossy().into_owned(),
             };
             self.db.add_series_cover(&series_cover)?;
+        }
+        else {
+            info(&format!("Offline mode! Getting series cover from database"));
         }
         
         let series_cover = self.db.get_series_cover(series_id)?;
@@ -415,6 +424,9 @@ impl Kavita {
             self.pull_volumes(series_id).await?;
         }
         let mut volumes = self.db.get_volumes(series_id)?;
+        if self.offline_mode {
+            volumes = volumes.into_iter().filter(|v| self.is_volume_cached(v.id)).collect();
+        }
         // sort volumes by title and converted to int and return sorted volumes
         volumes.sort_by_key(|v| v.title.clone().replace(|c: char| !c.is_digit(10), "").parse::<i32>().unwrap_or(0));
         // Update is_cached for each volume
