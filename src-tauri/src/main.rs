@@ -191,7 +191,14 @@ async fn get_picture(
     // info(&format!("Getting picture for series: {}, volume: {}, chapter: {}, page: {}", series_id, volume_id, chapter_id, page));
     let kavita_guard = kavita.lock().await;
     let picture = kavita_guard.get_picture(&chapter_id, &page).await.unwrap();
-    kavita_guard.save_progress(&ReadProgress { series_id, volume_id, chapter_id, page }).await.unwrap();
+    kavita_guard.save_progress(&ReadProgress { 
+        id: None, 
+        library_id: 0, // TODO: Get actual library_id from series
+        series_id, 
+        volume_id, 
+        chapter_id, 
+        page 
+    }).await.unwrap();
 
     let mut file = File::open(picture).unwrap();
     let mut buffer = Vec::new();
@@ -237,7 +244,7 @@ async fn serve_frontend() -> Result<Html<String>, StatusCode> {
 #[tokio::main]
 async fn start_server() {
     // Print app version and Tauri version on startup
-    info("🚀 Manga4Deck v0.5.9 - Starting up...");
+    info("🚀 Manga4Deck v0.5.10 - Starting up...");
     info(&format!("📦 Tauri version: {}", tauri::VERSION));
 
     //

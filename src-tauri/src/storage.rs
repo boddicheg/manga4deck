@@ -1,9 +1,7 @@
 use rusqlite::{Connection, Result};
 use std::sync::{Arc, Mutex};
 
-use crate::logger::{
-    info
-};
+// Removed unused import
 
 use crate::kavita::{
     Library,
@@ -54,6 +52,11 @@ impl Database {
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS manga_pictures (id INTEGER PRIMARY KEY AUTOINCREMENT, chapter_id INTEGER, page INTEGER, file TEXT)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS read_progress (id INTEGER PRIMARY KEY AUTOINCREMENT, library_id INTEGER, series_id INTEGER, volume_id INTEGER, chapter_id INTEGER, page INTEGER)",
             [],
         )?;
 
@@ -205,6 +208,29 @@ impl Database {
         Ok(volumes.collect::<Result<Vec<Volume>, rusqlite::Error>>()?)
     }   
 
+    pub fn get_volume_by_id(&self, volume_id: i32) -> Result<Option<Volume>, Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, series_id, chapter_id, volume_id, title, read, pages FROM volumes WHERE id = ?")?;
+        let mut rows = stmt.query_map([volume_id.to_string()], |row| {
+            Ok(Volume {
+                id: row.get(0)?,
+                series_id: row.get(1)?,
+                chapter_id: row.get(2)?,
+                volume_id: row.get(3)?,
+                title: row.get(4)?,
+                read: row.get(5)?,
+                pages: row.get(6)?,
+                is_cached: false,
+            })
+        })?;
+        
+        if let Some(row) = rows.next() {
+            Ok(Some(row?))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn add_volume(&self, volume: &Volume) -> Result<(), Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
         // check if volume already exists
@@ -288,6 +314,70 @@ impl Database {
         let mut stmt = conn.prepare("SELECT count(*) FROM manga_pictures WHERE chapter_id = ? AND page = ?").unwrap();
         let count: i32 = stmt.query_row([chapter_id.to_string(), page.to_string()], |r| r.get(0)).unwrap();
         count > 0
+    }
+
+    // Read Progress methods
+    pub fn add_read_progress(&self, progress: &crate::kavita::ReadProgress) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO read_progress (library_id, series_id, volume_id, chapter_id, page) VALUES (?, ?, ?, ?, ?)",
+            [
+                progress.library_id.to_string(),
+                progress.series_id.to_string(),
+                progress.volume_id.to_string(),
+                progress.chapter_id.to_string(),
+                progress.page.to_string(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_read_progress(&self, series_id: i32) -> Result<Vec<crate::kavita::ReadProgress>, Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, library_id, series_id, volume_id, chapter_id, page FROM read_progress WHERE series_id = ?")?;
+        let rows = stmt.query_map([series_id.to_string()], |row| {
+            Ok(crate::kavita::ReadProgress {
+                id: Some(row.get(0)?),
+                library_id: row.get(1)?,
+                series_id: row.get(2)?,
+                volume_id: row.get(3)?,
+                chapter_id: row.get(4)?,
+                page: row.get(5)?,
+            })
+        })?;
+        
+        let mut progress = Vec::new();
+        for row in rows {
+            progress.push(row?);
+        }
+        Ok(progress)
+    }
+
+    pub fn get_all_read_progress(&self) -> Result<Vec<crate::kavita::ReadProgress>, Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, library_id, series_id, volume_id, chapter_id, page FROM read_progress")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(crate::kavita::ReadProgress {
+                id: Some(row.get(0)?),
+                library_id: row.get(1)?,
+                series_id: row.get(2)?,
+                volume_id: row.get(3)?,
+                chapter_id: row.get(4)?,
+                page: row.get(5)?,
+            })
+        })?;
+        
+        let mut progress = Vec::new();
+        for row in rows {
+            progress.push(row?);
+        }
+        Ok(progress)
+    }
+
+    pub fn clear_read_progress(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM read_progress", [])?;
+        Ok(())
     }
 
 }
