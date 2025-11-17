@@ -164,6 +164,12 @@ impl Database {
                 "INSERT INTO series (id, library_id, title, read, pages) VALUES (?, ?, ?, ?, ?)",
                 [series.id.to_string(), series.library_id.to_string(), series.title.to_string(), series.read.to_string(), series.pages.to_string()],
             )?;
+        } else {
+            // Update existing series with new progress and title
+            conn.execute(
+                "UPDATE series SET title = ?, read = ?, pages = ? WHERE id = ?",
+                [series.title.to_string(), series.read.to_string(), series.pages.to_string(), series.id.to_string()],
+            )?;
         }
         Ok(())
     }

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { SeriesResponseInterface, fetchSeries } from "../services/Api";
 
@@ -36,7 +36,7 @@ const Library: React.FC = () => {
     divRefs.current[nextIndex]?.focus(); 
   };
 
-  const getSeries = async () => {
+  const getSeries = useCallback(async () => {
     try {
       const data = await fetchSeries(id);
       setSeries(data);
@@ -63,7 +63,7 @@ const Library: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id]);
 
   const enterDirectory = () => {
     const currentDiv = divRefs.current[currentIndexRef.current];
@@ -97,10 +97,15 @@ const Library: React.FC = () => {
   useEffect(() => {
     getSeries();
     window.addEventListener("keydown", handleKey);
+    // Refresh series periodically to update progress
+    const intervalId = setInterval(() => {
+      getSeries();
+    }, 5000); // Refresh every 5 seconds
     return () => {
       window.removeEventListener("keydown", handleKey); // Clean up
+      clearInterval(intervalId);
     };
-  }, []);
+  }, [getSeries]); // Use getSeries as dependency (which depends on id)
 
   useEffect(() => {
     currentIndexRef.current = currentIndex;
