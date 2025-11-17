@@ -33,7 +33,11 @@ const Library: React.FC = () => {
         : currentIndexRef.current - 1;
 
     setCurrentIndex(nextIndex);
-    divRefs.current[nextIndex]?.focus(); 
+    const element = divRefs.current[nextIndex];
+    if (element) {
+      element.focus();
+      // Scrolling is handled by useEffect when currentIndex changes
+    }
   };
 
   const getSeries = useCallback(async () => {
@@ -50,8 +54,12 @@ const Library: React.FC = () => {
         }
         setCurrentIndex(idx);
         setTimeout(() => {
-          divRefs.current[idx]?.focus();
-        }, 0);
+          const element = divRefs.current[idx];
+          if (element) {
+            element.focus();
+            // Scrolling is handled by useEffect when currentIndex changes
+          }
+        }, 100);
         firstLoadRef.current = false;
       }
     } catch (err) {
@@ -109,7 +117,61 @@ const Library: React.FC = () => {
 
   useEffect(() => {
     currentIndexRef.current = currentIndex;
-    seriesSizeRef.current = series.length
+    seriesSizeRef.current = series.length;
+    
+    // Fancy scroll animation to selected series when currentIndex changes
+    if (series.length > 0) {
+      const element = divRefs.current[currentIndex];
+      if (element) {
+        // Use a small delay to ensure DOM is updated
+        const timeoutId = setTimeout(() => {
+          const rect = element.getBoundingClientRect();
+          const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+          const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+          const elementTop = rect.top + scrollTop;
+          const elementLeft = rect.left + scrollLeft;
+          const centerY = elementTop - (window.innerHeight / 2) + (rect.height / 2);
+          const centerX = elementLeft - (window.innerWidth / 2) + (rect.width / 2);
+          
+          // Fancy easing function for smooth animation
+          const easeInOutCubic = (t: number): number => {
+            return t < 0.5 
+              ? 4 * t * t * t 
+              : 1 - Math.pow(-2 * t + 2, 3) / 2;
+          };
+          
+          // Animate scroll with easing
+          const startY = window.pageYOffset || document.documentElement.scrollTop;
+          const startX = window.pageXOffset || document.documentElement.scrollLeft;
+          const targetY = Math.max(0, centerY);
+          const targetX = Math.max(0, centerX);
+          const distanceY = targetY - startY;
+          const distanceX = targetX - startX;
+          const duration = 800; // 800ms animation
+          const startTime = performance.now();
+          
+          const animateScroll = (currentTime: number) => {
+            const elapsed = currentTime - startTime;
+            const progress = Math.min(elapsed / duration, 1);
+            const eased = easeInOutCubic(progress);
+            
+            window.scrollTo({
+              top: startY + distanceY * eased,
+              left: startX + distanceX * eased,
+              behavior: 'auto' // Use 'auto' since we're manually animating
+            });
+            
+            if (progress < 1) {
+              requestAnimationFrame(animateScroll);
+            }
+          };
+          
+          requestAnimationFrame(animateScroll);
+        }, 50);
+        
+        return () => clearTimeout(timeoutId);
+      }
+    }
   }, [currentIndex, series]);
 
   if (loading) {
@@ -208,9 +270,9 @@ const Library: React.FC = () => {
                 data-route={`/series/${serie.id}`}
                 ref={(el) => (divRefs.current[index] = el)}
                 tabIndex={-1}
-                className={`relative rounded focus:outline-none transform transition-all duration-200 ${
+                className={`relative rounded focus:outline-none transform transition-all duration-300 ${
                   currentIndex === index
-                    ? "border-2 border-black shadow-[0_0_15px_rgba(0,0,0,0.5)] scale-105 -translate-y-1"
+                    ? "border-2 border-black shadow-[0_0_20px_rgba(255,215,0,0.6),0_0_40px_rgba(255,215,0,0.3)] scale-110 -translate-y-2 z-10 selected-series"
                     : "hover:scale-105 hover:-translate-y-1"
                 }`}
                 style={{
@@ -301,6 +363,19 @@ const Library: React.FC = () => {
             100% {
               transform: translateX(-200%);
             }
+          }
+          
+          @keyframes glowPulse {
+            0%, 100% {
+              box-shadow: 0 0 20px rgba(255, 215, 0, 0.6), 0 0 40px rgba(255, 215, 0, 0.3), 8px -8px 12px rgba(0,0,0,0.4);
+            }
+            50% {
+              box-shadow: 0 0 30px rgba(255, 215, 0, 0.8), 0 0 60px rgba(255, 215, 0, 0.5), 8px -8px 12px rgba(0,0,0,0.4);
+            }
+          }
+          
+          .selected-series {
+            animation: glowPulse 2s ease-in-out infinite;
           }
         `}
       </style>

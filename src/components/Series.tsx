@@ -37,7 +37,11 @@ const Series: React.FC = () => {
           : currentIndexRef.current - 1;
 
     setCurrentIndex(nextIndex);
-    divRefs.current[nextIndex]?.focus();
+    const element = divRefs.current[nextIndex];
+    if (element) {
+      element.focus();
+      // Scrolling is handled by useEffect when currentIndex changes
+    }
   };
 
   const getSeries = async () => {
@@ -58,8 +62,12 @@ const Series: React.FC = () => {
         }
         setCurrentIndex(idx);
         setTimeout(() => {
-          divRefs.current[idx]?.focus();
-        }, 0);
+          const element = divRefs.current[idx];
+          if (element) {
+            element.focus();
+            // Scrolling is handled by useEffect when currentIndex changes
+          }
+        }, 100);
         firstLoadRef.current = false;
       }
     } catch (err) {
@@ -172,7 +180,32 @@ const Series: React.FC = () => {
 
   useEffect(() => {
     currentIndexRef.current = currentIndex;
-    volumesSizeRef.current = volumes.length
+    volumesSizeRef.current = volumes.length;
+    
+    // Scroll to selected volume when currentIndex changes
+    if (volumes.length > 0) {
+      const element = divRefs.current[currentIndex];
+      if (element) {
+        // Use a small delay to ensure DOM is updated
+        const timeoutId = setTimeout(() => {
+          const rect = element.getBoundingClientRect();
+          const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+          const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+          const elementTop = rect.top + scrollTop;
+          const elementLeft = rect.left + scrollLeft;
+          const centerY = elementTop - (window.innerHeight / 2) + (rect.height / 2);
+          const centerX = elementLeft - (window.innerWidth / 2) + (rect.width / 2);
+          
+          window.scrollTo({
+            top: Math.max(0, centerY),
+            left: Math.max(0, centerX),
+            behavior: 'smooth'
+          });
+        }, 50);
+        
+        return () => clearTimeout(timeoutId);
+      }
+    }
   }, [currentIndex, volumes]);
 
   if (loading) {
