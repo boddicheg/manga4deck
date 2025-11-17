@@ -17,6 +17,8 @@ use crate::storage::{
 use std::sync::{Arc, Mutex as StdMutex};
 use std::thread;
 use std::collections::VecDeque;
+use tokio::sync::broadcast;
+use serde_json::json as serde_json_json;
 
 fn get_datadir() -> PathBuf {
     let home = dirs::home_dir().expect("Could not find home directory");
@@ -109,6 +111,8 @@ pub struct Kavita {
     // --- Caching fields ---
     pub caching_queue: Arc<StdMutex<VecDeque<i32>>>, // series_id queue
     pub caching_thread_handle: Arc<StdMutex<Option<thread::JoinHandle<()>>>>,
+    // --- WebSocket fields ---
+    pub ws_sender: Option<Arc<broadcast::Sender<serde_json::Value>>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -169,6 +173,7 @@ impl Kavita {
             api_key: DEFAULT_API_KEY.to_string(),
             caching_queue: Arc::new(StdMutex::new(VecDeque::new())),
             caching_thread_handle: Arc::new(StdMutex::new(None)),
+            ws_sender: None,
         };
 
         kavita
@@ -180,6 +185,44 @@ impl Kavita {
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
         self.db.get_setting(key)
+    }
+
+    pub fn set_websocket_sender(&mut self, sender: Arc<broadcast::Sender<serde_json::Value>>) {
+        self.ws_sender = Some(sender);
+    }
+
+    fn send_websocket_message(&self, event: &str, message: &str, data: Option<serde_json::Value>) {
+        if let Some(sender) = &self.ws_sender {
+            let ws_msg = serde_json_json!({
+                "event": event,
+                "message": message,
+                "data": data
+            });
+            let _ = sender.send(ws_msg);
+        }
+    }
+
+    pub fn send_connection_status(&self, is_offline: bool, logged_as: &str) {
+        if is_offline {
+            self.send_websocket_message(
+                "connection_status",
+                "Disconnected from Kavita server - Offline mode",
+                Some(serde_json_json!({
+                    "mode": "offline",
+                    "connected": false
+                }))
+            );
+        } else {
+            self.send_websocket_message(
+                "connection_status",
+                &format!("Connected to Kavita server as {}", logged_as),
+                Some(serde_json_json!({
+                    "mode": "online",
+                    "connected": true,
+                    "username": logged_as
+                }))
+            );
+        }
     }
 
     pub async fn reconnect_with_creds(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -227,12 +270,16 @@ impl Kavita {
                 self.api_key = data["apiKey"].as_str().unwrap_or("").to_string();
                 self.offline_mode = false;
                 info(&format!("Logged as: {}", self.logged_as));
+                // Send connection status notification
+                self.send_connection_status(false, &self.logged_as);
             },
             Ok(Err(e)) => {
                 self.offline_mode = true;
                 self.logged_as = "".to_string();
                 self.token = "".to_string();
                 info(&format!("Failed to get token. Now in offline mode"));
+                // Send connection status notification
+                self.send_connection_status(true, "");
                 return Err(Box::new(e));
             }
             Err(_) => {
@@ -240,17 +287,25 @@ impl Kavita {
                 self.logged_as = "".to_string();
                 self.token = "".to_string();
                 info(&format!("Failed to get token. Now in offline mode"));
+                // Send connection status notification
+                self.send_connection_status(true, "");
                 return Err("Timeout".into());
             }
         };
         info(&format!("reconnect_with_creds - done"));
         
-        // Upload any offline progress now that we're online
+        // Upload any offline progress now that we're online (in background thread)
         if !self.offline_mode {
-            info("Attempting to upload offline progress...");
-            if let Err(e) = self.upload_progress().await {
-                info(&format!("Failed to upload offline progress: {}", e));
-            }
+            info("Spawning background task to upload offline progress...");
+            let db = self.db.clone();
+            let ip = self.ip.clone();
+            let token = self.token.clone();
+            let ws_sender = self.ws_sender.clone();
+            tokio::spawn(async move {
+                if let Err(e) = Self::upload_progress_background(db, ip, token, ws_sender).await {
+                    info(&format!("Failed to upload offline progress: {}", e));
+                }
+            });
         }
         
         Ok(())
@@ -579,6 +634,113 @@ impl Kavita {
         }
 
         Ok(())
+    }
+
+    // Background version that doesn't require &self, used for spawning tasks
+    async fn upload_progress_background(
+        db: Database,
+        ip: String,
+        token: String,
+        ws_sender: Option<Arc<broadcast::Sender<serde_json::Value>>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Send start message via WebSocket
+        if let Some(sender) = &ws_sender {
+            let start_msg = serde_json_json!({
+                "event": "progress_upload_start",
+                "message": "Starting to upload offline progress...",
+                "data": null
+            });
+            let _ = sender.send(start_msg);
+        }
+
+        info("Uploading offline progress to server in background thread...");
+        let all_progress = db.get_all_read_progress()?;
+        let progress_count = all_progress.len();
+        
+        if progress_count == 0 {
+            info("No offline progress to upload");
+            // Send end message even if no progress
+            if let Some(sender) = &ws_sender {
+                let end_msg = serde_json_json!({
+                    "event": "progress_upload_end",
+                    "message": "No offline progress to upload",
+                    "data": {
+                        "total": 0,
+                        "succeeded": 0,
+                        "failed": 0
+                    }
+                });
+                let _ = sender.send(end_msg);
+            }
+            return Ok(());
+        }
+
+        info(&format!("Found {} progress entries to upload", progress_count));
+        
+        let mut success_count = 0;
+        let mut fail_count = 0;
+        
+        for progress in &all_progress {
+            let url = format!("http://{}/api/reader/progress", ip);
+            let client = reqwest::Client::new();
+            let response = client.post(&url)
+                .header("Authorization", format!("Bearer {}", token))
+                .json(&json!({
+                    "seriesId": progress.series_id,
+                    "volumeId": progress.volume_id,
+                    "chapterId": progress.chapter_id,
+                    "pageNum": progress.page,
+                }))
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        success_count += 1;
+                        if success_count % 10 == 0 {
+                            info(&format!("Uploaded {}/{} progress entries...", success_count, progress_count));
+                        }
+                    } else {
+                        fail_count += 1;
+                        info(&format!("Failed to upload progress for series_id={}, page={}: status {}", 
+                            progress.series_id, progress.page, resp.status()));
+                    }
+                }
+                Err(e) => {
+                    fail_count += 1;
+                    info(&format!("Error uploading progress for series_id={}, page={}: {}", 
+                        progress.series_id, progress.page, e));
+                }
+            }
+        }
+
+        info(&format!("Progress upload complete: {} succeeded, {} failed", success_count, fail_count));
+
+        // Send end message via WebSocket
+        if let Some(sender) = &ws_sender {
+            let end_msg = serde_json_json!({
+                "event": "progress_upload_end",
+                "message": format!("Progress upload complete: {} succeeded, {} failed", success_count, fail_count),
+                "data": {
+                    "total": progress_count,
+                    "succeeded": success_count,
+                    "failed": fail_count
+                }
+            });
+            let _ = sender.send(end_msg);
+        }
+
+        // Clear local progress after upload attempt (even if some failed)
+        // This prevents re-uploading the same entries on next connection
+        if success_count > 0 {
+            info(&format!("Clearing {} successfully uploaded progress entries", success_count));
+            // Note: We clear all entries, not just successful ones, to avoid infinite retry loops
+            // Failed entries will be lost, but new progress will continue to be saved
+            db.clear_read_progress()?;
+        }
+
+        Ok(())
     } 
 
     pub async fn set_volume_as_read(&self, series_id: &i32, volume_id: &i32) -> Result<(), Box<dyn std::error::Error>> {
@@ -649,15 +811,53 @@ impl Kavita {
             let ip = self.ip.clone();
             let api_key = self.api_key.clone();
             let token = self.token.clone();
+            let ws_sender = self.ws_sender.clone();
             *handle_guard = Some(thread::spawn(move || {
-                cache_serie_threaded(db, queue, ip, api_key, token);
+                cache_serie_threaded(db, queue, ip, api_key, token, ws_sender);
             }));
         }
+    }
+
+    // Remove cached volumes for a series and remove from caching queue
+    pub fn remove_series_cache(&self, series_id: i32) -> Result<(), Box<dyn std::error::Error>> {
+        // Check if series has cached volumes
+        if !self.db.has_cached_volumes(series_id) {
+            return Ok(()); // Nothing to remove
+        }
+
+        // Get all picture files for this series
+        let picture_files = self.db.get_series_picture_files(series_id)?;
+        
+        // Delete files from disk
+        for file_path in &picture_files {
+            if let Err(e) = fs::remove_file(file_path) {
+                info(&format!("Failed to delete cache file {}: {}", file_path, e));
+            }
+        }
+
+        // Delete from database
+        self.db.delete_series_cache(series_id)?;
+
+        // Remove from caching queue if present
+        {
+            let mut queue = self.caching_queue.lock().unwrap();
+            queue.retain(|&id| id != series_id);
+        }
+
+        info(&format!("Removed cache for series {} ({} files)", series_id, picture_files.len()));
+        Ok(())
     }
 }
 
 // Background thread for caching series
-fn cache_serie_threaded(db: Database, queue: Arc<StdMutex<VecDeque<i32>>>, ip: String, api_key: String, _token: String) {
+fn cache_serie_threaded(
+    db: Database, 
+    queue: Arc<StdMutex<VecDeque<i32>>>, 
+    ip: String, 
+    api_key: String, 
+    _token: String,
+    ws_sender: Option<Arc<broadcast::Sender<serde_json::Value>>>,
+) {
     use ureq;
     use std::io::Read;
     loop {
@@ -666,12 +866,28 @@ fn cache_serie_threaded(db: Database, queue: Arc<StdMutex<VecDeque<i32>>>, ip: S
             q.pop_front()
         };
         if let Some(series_id) = series_id {
+            // Send caching start notification
+            if let Some(sender) = &ws_sender {
+                let start_msg = serde_json_json!({
+                    "event": "caching_start",
+                    "message": format!("Starting to cache series {}", series_id),
+                    "data": {
+                        "series_id": series_id
+                    }
+                });
+                let _ = sender.send(start_msg);
+            }
+
             let mut volumes = db.get_volumes(&series_id).unwrap_or_default();
             // Sort volumes by the number in their title (e.g., 'Volume 20' < 'Volume 21')
             volumes.sort_by_key(|v| {
                 let digits: String = v.title.chars().filter(|c| c.is_digit(10)).collect();
                 digits.parse::<i32>().unwrap_or(0)
             });
+            
+            let total_volumes = volumes.len();
+            let mut cached_volumes = 0;
+            
             for volume in volumes {
                 if volume.pages > 0 && volume.read >= volume.pages {
                     continue; // Skip fully read volumes
@@ -700,7 +916,39 @@ fn cache_serie_threaded(db: Database, queue: Arc<StdMutex<VecDeque<i32>>>, ip: S
                     }
                 }
                 info(&format!("Finished caching volume {} (title: {}) in series {}", volume.id, volume.title, series_id));
-
+                
+                // Send volume cached notification
+                cached_volumes += 1;
+                if let Some(sender) = &ws_sender {
+                    let volume_msg = serde_json_json!({
+                        "event": "volume_cached",
+                        "message": format!("Cached volume: {}", volume.title),
+                        "data": {
+                            "series_id": series_id,
+                            "volume_id": volume.id,
+                            "volume_title": volume.title,
+                            "progress": {
+                                "current": cached_volumes,
+                                "total": total_volumes
+                            }
+                        }
+                    });
+                    let _ = sender.send(volume_msg);
+                }
+            }
+            
+            // Send caching end notification
+            if let Some(sender) = &ws_sender {
+                let end_msg = serde_json_json!({
+                    "event": "caching_end",
+                    "message": format!("Finished caching series {}", series_id),
+                    "data": {
+                        "series_id": series_id,
+                        "volumes_cached": cached_volumes,
+                        "total_volumes": total_volumes
+                    }
+                });
+                let _ = sender.send(end_msg);
             }
         } else {
             std::thread::sleep(std::time::Duration::from_millis(200));

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import { fetchClearCache, fetchServerStatus, fetchUpdateLibrary } from "../services/Api";
+import { fetchClearCache, fetchServerStatus, fetchUpdateLibrary, toggleOfflineMode } from "../services/Api";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useToast } from "./ToastContainer";
@@ -10,6 +10,7 @@ const Dashboard: React.FC = () => {
   const [logged, setLogged] = useState<string>("");
   const [serverIP, setServerIP] = useState<string>("");
   const [cacheSize, setCacheSize] = useState<number>(0.0);
+  const [offlineMode, setOfflineMode] = useState<boolean>(false);
   const divRefs = useRef<(HTMLDivElement | null)[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const currentIndexRef = useRef(currentIndex);
@@ -52,6 +53,17 @@ const Dashboard: React.FC = () => {
     }
   }
 
+  const toggleOffline = async () => {
+    try {
+      const result = await toggleOfflineMode();
+      setOfflineMode(result.offline_mode);
+      showToast(result.message, result.offline_mode ? "warning" : "success");
+      getServerStatus();
+    } catch (error) {
+      showToast("Failed to toggle offline mode", "error");
+    }
+  }
+
   const navigateTo = (uri: string | null | undefined) => {
     if (uri)
       navigate(`${uri}`);
@@ -86,9 +98,13 @@ const Dashboard: React.FC = () => {
     const updateLib_ = async () => {
       await updateLib();
     };
+    const toggleOffline_ = async () => {
+      await toggleOffline();
+    };
     if (route == "/exit-app") exit_();
     else if (route == "/clean-cache") cleanCache_();
     else if (route == "/update-lib") updateLib_();
+    else if (route == "/toggle-offline") toggleOffline_();
     else navigateTo(route);
   };
 
@@ -132,6 +148,7 @@ const Dashboard: React.FC = () => {
       setServerIP(data.ip)
       setLoading(false);
       setCacheSize(data.cache)
+      setOfflineMode(data.offline_mode || false)
     } catch (err) {
       setServerStatus(false);
       setLogged("");
@@ -170,15 +187,17 @@ const Dashboard: React.FC = () => {
   return (
     <div className="w-full h-screen p-4 bg-zinc-900">
       <div className={
-        (serverStatus || !loading) ? "bg-green-500 w-full text-center pt-1 pb-1 text-white"
-          : "bg-red-500 w-full text-center pt-1 pb-1 text-white"
+        loading ? "bg-gray-500 w-full text-center pt-1 pb-1 text-white" :
+        offlineMode ? "bg-yellow-500 w-full text-center pt-1 pb-1 text-white" :
+        (serverStatus ? "bg-green-500 w-full text-center pt-1 pb-1 text-white"
+          : "bg-red-500 w-full text-center pt-1 pb-1 text-white")
       }>
 
         {
           loading ? "Loading..." :
-            ("Server status: " + (serverStatus ? "online" : "offline")
-              + (serverStatus ? ", logged as " + logged : "")
-              + (serverStatus ? ", ip is " + serverIP : ""))
+            ("Server status: " + (offlineMode ? "offline mode (manual)" : (serverStatus ? "online" : "offline"))
+              + (serverStatus && !offlineMode ? ", logged as " + logged : "")
+              + (serverStatus && !offlineMode ? ", ip is " + serverIP : ""))
         }
       </div>
 
@@ -275,8 +294,34 @@ const Dashboard: React.FC = () => {
 
         <div
           key={4}
-          data-route={"/exit-app"}
+          data-route={"/toggle-offline"}
           ref={(el) => (divRefs.current[4] = el)} // Assign ref
+          tabIndex={-1} // Make it focusable but not in tab order
+          className={`
+            border-2 
+            rounded 
+            ${offlineMode ? "bg-yellow-300" : "bg-gray-300"}
+            min-h-[200px]
+            min-w-[150px]
+            m-3
+            inline-block
+            ${currentIndex === 4
+              ? "border-2 border-red-500"
+              : "border-gray-300"
+            }`}
+        >
+          <div className="text-lg text-center font-bold mt-12">
+            {offlineMode ? "Offline" : "Online"}
+          </div>
+          <div className="text-sm text-gray-600 text-center">
+            {offlineMode ? "Switch to online" : "Switch to offline"}
+          </div>
+        </div>
+
+        <div
+          key={5}
+          data-route={"/exit-app"}
+          ref={(el) => (divRefs.current[5] = el)} // Assign ref
           tabIndex={-1} // Make it focusable but not in tab order
           className={`
             border-2 
@@ -286,7 +331,7 @@ const Dashboard: React.FC = () => {
             min-w-[150px]
             m-3
             inline-block
-            ${currentIndex === 4
+            ${currentIndex === 5
               ? "border-2 border-red-500"
               : "border-gray-300"
             }`}

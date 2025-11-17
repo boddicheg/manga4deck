@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { VolumeResponseInterface, fetchCacheSeries, fetchVolumes, fetchReadVolume, fetchUnReadVolume } from "../services/Api";
+import { VolumeResponseInterface, fetchCacheSeries, fetchVolumes, fetchReadVolume, fetchUnReadVolume, removeSeriesCache } from "../services/Api";
+import { useToast } from "./ToastContainer";
 
 interface SeriesParams {
   [id: string]: string | undefined;
@@ -8,6 +9,7 @@ interface SeriesParams {
 
 const Series: React.FC = () => {
   const { id } = useParams<SeriesParams>();
+  const { showToast } = useToast();
   const [volumes, setVolumes] = useState<Array<VolumeResponseInterface>>([]);
   const volumesSizeRef = useRef(volumes.length);
   const divRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -35,7 +37,11 @@ const Series: React.FC = () => {
           : currentIndexRef.current - 1;
 
     setCurrentIndex(nextIndex);
-    divRefs.current[nextIndex]?.focus();
+    const element = divRefs.current[nextIndex];
+    if (element) {
+      element.focus();
+      // Scrolling is handled by useEffect when currentIndex changes
+    }
   };
 
   const getSeries = async () => {
@@ -56,8 +62,12 @@ const Series: React.FC = () => {
         }
         setCurrentIndex(idx);
         setTimeout(() => {
-          divRefs.current[idx]?.focus();
-        }, 0);
+          const element = divRefs.current[idx];
+          if (element) {
+            element.focus();
+            // Scrolling is handled by useEffect when currentIndex changes
+          }
+        }, 100);
         firstLoadRef.current = false;
       }
     } catch (err) {
@@ -115,10 +125,43 @@ const Series: React.FC = () => {
         }
         break;
       case "F2":
-        const startCaching = async (id: string | undefined) => {
-          if (id) await fetchCacheSeries(id);
+        const toggleCache = async (series_id: string | undefined) => {
+          if (!series_id) return;
+          
+          // First, refresh volumes to get the latest cache status
+          let freshVolumes: Array<VolumeResponseInterface> = [];
+          try {
+            freshVolumes = await fetchVolumes(series_id);
+          } catch (error) {
+            showToast("Failed to check cache status", "error", 3000);
+            return;
+          }
+          
+          // Check if there are any cached volumes using fresh data
+          const hasCached = freshVolumes.some(v => v.is_cached);
+          console.log("F2 pressed - hasCached:", hasCached, "volumes:", freshVolumes.map(v => ({ id: v.volume_id, is_cached: v.is_cached })));
+          
+          if (hasCached) {
+            // Remove cached volumes
+            try {
+              const result = await removeSeriesCache(series_id);
+              showToast(result.message || "Cache removed successfully", "success", 3000);
+              // Refresh volumes to update cache status
+              getSeries();
+            } catch (error) {
+              showToast("Failed to remove cache", "error", 3000);
+            }
+          } else {
+            // Start caching
+            try {
+              await fetchCacheSeries(series_id);
+              showToast("Caching started", "info", 3000);
+            } catch (error) {
+              showToast("Failed to start caching", "error", 3000);
+            }
+          }
         }
-        startCaching(id);
+        toggleCache(id);
         break;
       default:
         console.log(`Key pressed: ${event.key}`);
@@ -137,7 +180,32 @@ const Series: React.FC = () => {
 
   useEffect(() => {
     currentIndexRef.current = currentIndex;
-    volumesSizeRef.current = volumes.length
+    volumesSizeRef.current = volumes.length;
+    
+    // Scroll to selected volume when currentIndex changes
+    if (volumes.length > 0) {
+      const element = divRefs.current[currentIndex];
+      if (element) {
+        // Use a small delay to ensure DOM is updated
+        const timeoutId = setTimeout(() => {
+          const rect = element.getBoundingClientRect();
+          const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+          const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+          const elementTop = rect.top + scrollTop;
+          const elementLeft = rect.left + scrollLeft;
+          const centerY = elementTop - (window.innerHeight / 2) + (rect.height / 2);
+          const centerX = elementLeft - (window.innerWidth / 2) + (rect.width / 2);
+          
+          window.scrollTo({
+            top: Math.max(0, centerY),
+            left: Math.max(0, centerX),
+            behavior: 'smooth'
+          });
+        }, 50);
+        
+        return () => clearTimeout(timeoutId);
+      }
+    }
   }, [currentIndex, volumes]);
 
   if (loading) {
@@ -155,7 +223,7 @@ const Series: React.FC = () => {
           Volumes
         </div>
         <div className="text-l text-white mb-2 text-center bg-black bg-opacity-50 py-1">
-          F1/Y - mark volume as read, F2/X - start cache all volumes
+          F1/Y - mark volume as read, F2/X - {volumes.some(v => v.is_cached) ? "remove cached volumes" : "start cache all volumes"}
         </div>
 
         <div 

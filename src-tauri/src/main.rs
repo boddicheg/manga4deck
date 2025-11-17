@@ -22,6 +22,7 @@ use kavita::{
     ReadProgress,
 };
 
+
 mod storage;
 mod fallback_html;
 
@@ -30,8 +31,7 @@ use axum::{
     Router,
     http::StatusCode,
     Json,
-    extract::Extension,
-    extract::Path,
+    extract::{Extension, Path},
     response::Html,
     response::Response,
     body::Body
@@ -39,7 +39,10 @@ use axum::{
 use tower_http::cors::{Any, CorsLayer};
 use serde::Serialize;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, broadcast};
+use futures_util::{SinkExt, StreamExt};
+use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio::net::{TcpListener, TcpStream};
 
 // const APP_NAME: &str = "manga4deck";
 const KAVITA_IP: &str = "0.0.0.0:11337";
@@ -50,6 +53,8 @@ fn exit_app() {
 }
 
 type SharedKavita = Arc<Mutex<Kavita>>;
+
+type WebSocketSender = broadcast::Sender<serde_json::Value>;
 
 async fn get_logs() -> (StatusCode, Json<LogResponse>) {
     // info("[get_logs] Getting logs...");
@@ -63,6 +68,7 @@ struct StatusResponse {
     ip: String,
     logged_as: String,
     cache: u64,
+    offline_mode: bool,
 }
 
 async fn get_status(Extension(kavita): Extension<SharedKavita>) -> (StatusCode, Json<StatusResponse>) {
@@ -72,13 +78,40 @@ async fn get_status(Extension(kavita): Extension<SharedKavita>) -> (StatusCode, 
         .unwrap_or_else(|| "".to_string());
     let logged_as = kavita_guard.logged_as.clone();
     let cache = get_cache_size(1024 * 1024);
+    let offline_mode = kavita_guard.offline_mode;
 
     (StatusCode::OK, Json(StatusResponse {
-        status: true,
+        status: !offline_mode,
         ip,
         logged_as,
         cache,
+        offline_mode,
     }))
+}
+
+async fn toggle_offline_mode(Extension(kavita): Extension<SharedKavita>) -> (StatusCode, Json<serde_json::Value>) {
+    let mut kavita_guard = kavita.lock().await;
+    kavita_guard.offline_mode = !kavita_guard.offline_mode;
+    
+    // Send connection status notification
+    if kavita_guard.offline_mode {
+        kavita_guard.send_connection_status(true, "");
+        info("Manually switched to offline mode");
+    } else {
+        // Try to reconnect when switching back to online
+        let reconnect_result = kavita_guard.reconnect_with_creds().await;
+        if reconnect_result.is_err() {
+            // If reconnection fails, stay in offline mode
+            kavita_guard.offline_mode = true;
+            kavita_guard.send_connection_status(true, "");
+            info("Failed to reconnect, staying in offline mode");
+        }
+    }
+
+    (StatusCode::OK, Json(serde_json::json!({
+        "offline_mode": kavita_guard.offline_mode,
+        "message": if kavita_guard.offline_mode { "Switched to offline mode" } else { "Switched to online mode" }
+    })))
 }
 
 async fn update_server_settings(Extension(kavita): Extension<SharedKavita>, Json(creds): Json<ConnectionCreds>) -> (StatusCode, Json<ConnectionCreds>) {
@@ -235,6 +268,81 @@ async fn cache_serie_route(
     (StatusCode::OK, Json(serde_json::json!({"status": "caching started", "series_id": series_id})))
 }
 
+async fn remove_series_cache_route(
+    Extension(kavita): Extension<SharedKavita>,
+    Path(series_id): Path<i32>
+) -> (StatusCode, Json<serde_json::Value>) {
+    let kavita_guard = kavita.lock().await;
+    match kavita_guard.remove_series_cache(series_id) {
+        Ok(_) => {
+            (StatusCode::OK, Json(serde_json::json!({
+                "status": "success",
+                "message": format!("Cache removed for series {}", series_id),
+                "series_id": series_id
+            })))
+        }
+        Err(e) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                "status": "error",
+                "message": format!("Failed to remove cache: {}", e),
+                "series_id": series_id
+            })))
+        }
+    }
+}
+
+async fn start_websocket_server(sender: WebSocketSender) {
+    let addr = "0.0.0.0:11338";
+    let listener = TcpListener::bind(addr).await.expect("Failed to bind WebSocket server");
+    info(&format!("WebSocket server running at {}", addr));
+
+    while let Ok((stream, _)) = listener.accept().await {
+        let sender_clone = sender.clone();
+        tokio::spawn(async move {
+            if let Err(e) = handle_websocket_connection(stream, sender_clone).await {
+                info(&format!("WebSocket connection error: {}", e));
+            }
+        });
+    }
+}
+
+async fn handle_websocket_connection(stream: TcpStream, sender: WebSocketSender) -> Result<(), Box<dyn std::error::Error>> {
+    let ws_stream = accept_async(stream).await?;
+    let (mut sender_ws, mut receiver_ws) = ws_stream.split();
+    let mut rx = sender.subscribe();
+
+    // Spawn a task to forward messages from the broadcast channel to the WebSocket
+    let mut send_task = tokio::spawn(async move {
+        while let Ok(msg) = rx.recv().await {
+            let json_msg = serde_json::to_string(&msg).unwrap_or_else(|_| "{}".to_string());
+            if sender_ws.send(Message::Text(json_msg)).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Spawn a task to receive messages from the WebSocket (for ping/pong)
+    let mut recv_task = tokio::spawn(async move {
+        while let Some(Ok(msg)) = receiver_ws.next().await {
+            if let Message::Close(_) = msg {
+                break;
+            }
+        }
+    });
+
+    // Wait for either task to complete
+    tokio::select! {
+        _ = (&mut send_task) => {
+            recv_task.abort();
+        }
+        _ = (&mut recv_task) => {
+            send_task.abort();
+        }
+    }
+
+    Ok(())
+}
+
 async fn serve_frontend() -> Result<Html<String>, StatusCode> {
     // Always serve the fallback HTML form
     info("Serving fallback HTML form");
@@ -244,14 +352,27 @@ async fn serve_frontend() -> Result<Html<String>, StatusCode> {
 #[tokio::main]
 async fn start_server() {
     // Print app version and Tauri version on startup
-    info("🚀 Manga4Deck v0.5.10 - Starting up...");
+    info("🚀 Manga4Deck v0.5.11 - Starting up...");
     info(&format!("📦 Tauri version: {}", tauri::VERSION));
 
-    //
+    // Create WebSocket broadcaster
+    let (ws_sender, _) = broadcast::channel::<serde_json::Value>(100);
+    let ws_sender_arc = Arc::new(ws_sender);
     
     // Create CORS layer (allow all origins and methods)
     let mut kavita = Kavita::new();
+    // Store WebSocket sender in Kavita BEFORE reconnecting so status messages can be sent
+    kavita.set_websocket_sender(ws_sender_arc.clone());
     let _ = kavita.reconnect_with_creds().await;
+    // Send initial connection status
+    {
+        let kavita_guard = &kavita;
+        if kavita_guard.offline_mode {
+            kavita_guard.send_connection_status(true, "");
+        } else {
+            kavita_guard.send_connection_status(false, &kavita_guard.logged_as);
+        }
+    }
     let kavita = Arc::new(Mutex::new(kavita));
 
     let cors = CorsLayer::new()
@@ -259,10 +380,17 @@ async fn start_server() {
         .allow_methods(Any)
         .allow_headers(Any);
 
+    // Start WebSocket server in a separate task
+    let ws_sender_for_server = (*ws_sender_arc).clone();
+    tokio::spawn(async move {
+        start_websocket_server(ws_sender_for_server).await;
+    });
+
     let app = Router::new()
         .route("/", get(serve_frontend))
         .route("/api/logs", get(get_logs))
         .route("/api/status", get(get_status))
+        .route("/api/toggle-offline-mode", post(toggle_offline_mode))
         .route("/api/server-settings", get(get_server_settings))
         .route("/api/server-settings", post(update_server_settings))
         .route("/api/library", get(get_libraries))
@@ -276,6 +404,7 @@ async fn start_server() {
         .route("/api/read-volume/{series_id}/{volume_id}", get(read_volume))
         .route("/api/unread-volume/{series_id}/{volume_id}", get(unread_volume))
         .route("/api/cache/serie/{series_id}", get(cache_serie_route))
+        .route("/api/cache/remove/{series_id}", post(remove_series_cache_route))
         .layer(cors)
         .layer(Extension(kavita));
 

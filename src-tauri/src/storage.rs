@@ -164,6 +164,12 @@ impl Database {
                 "INSERT INTO series (id, library_id, title, read, pages) VALUES (?, ?, ?, ?, ?)",
                 [series.id.to_string(), series.library_id.to_string(), series.title.to_string(), series.read.to_string(), series.pages.to_string()],
             )?;
+        } else {
+            // Update existing series with new progress and title
+            conn.execute(
+                "UPDATE series SET title = ?, read = ?, pages = ? WHERE id = ?",
+                [series.title.to_string(), series.read.to_string(), series.pages.to_string(), series.id.to_string()],
+            )?;
         }
         Ok(())
     }
@@ -313,6 +319,45 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT count(*) FROM manga_pictures WHERE chapter_id = ? AND page = ?").unwrap();
         let count: i32 = stmt.query_row([chapter_id.to_string(), page.to_string()], |r| r.get(0)).unwrap();
+        count > 0
+    }
+
+    // Get all picture files for a series (through volumes)
+    pub fn get_series_picture_files(&self, series_id: i32) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        // Get all chapter_ids for volumes in this series
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT mp.file FROM manga_pictures mp INNER JOIN volumes v ON mp.chapter_id = v.chapter_id WHERE v.series_id = ?"
+        )?;
+        let rows = stmt.query_map([series_id.to_string()], |row| {
+            Ok(row.get::<_, String>(0)?)
+        })?;
+        
+        let mut files = Vec::new();
+        for row in rows {
+            files.push(row?);
+        }
+        Ok(files)
+    }
+
+    // Delete all cached pictures for a series
+    pub fn delete_series_cache(&self, series_id: i32) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        // Delete all pictures for chapters in volumes of this series
+        conn.execute(
+            "DELETE FROM manga_pictures WHERE chapter_id IN (SELECT DISTINCT chapter_id FROM volumes WHERE series_id = ?)",
+            [series_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    // Check if series has any cached volumes
+    pub fn has_cached_volumes(&self, series_id: i32) -> bool {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT COUNT(*) FROM manga_pictures mp INNER JOIN volumes v ON mp.chapter_id = v.chapter_id WHERE v.series_id = ?"
+        ).unwrap();
+        let count: i32 = stmt.query_row([series_id.to_string()], |r| r.get(0)).unwrap();
         count > 0
     }
 
