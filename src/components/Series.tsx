@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { VolumeResponseInterface, fetchCacheSeries, fetchVolumes, fetchReadVolume, fetchUnReadVolume } from "../services/Api";
+import { VolumeResponseInterface, fetchCacheSeries, fetchVolumes, fetchReadVolume, fetchUnReadVolume, removeSeriesCache } from "../services/Api";
+import { useToast } from "./ToastContainer";
 
 interface SeriesParams {
   [id: string]: string | undefined;
@@ -8,6 +9,7 @@ interface SeriesParams {
 
 const Series: React.FC = () => {
   const { id } = useParams<SeriesParams>();
+  const { showToast } = useToast();
   const [volumes, setVolumes] = useState<Array<VolumeResponseInterface>>([]);
   const volumesSizeRef = useRef(volumes.length);
   const divRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -115,10 +117,43 @@ const Series: React.FC = () => {
         }
         break;
       case "F2":
-        const startCaching = async (id: string | undefined) => {
-          if (id) await fetchCacheSeries(id);
+        const toggleCache = async (series_id: string | undefined) => {
+          if (!series_id) return;
+          
+          // First, refresh volumes to get the latest cache status
+          let freshVolumes: Array<VolumeResponseInterface> = [];
+          try {
+            freshVolumes = await fetchVolumes(series_id);
+          } catch (error) {
+            showToast("Failed to check cache status", "error", 3000);
+            return;
+          }
+          
+          // Check if there are any cached volumes using fresh data
+          const hasCached = freshVolumes.some(v => v.is_cached);
+          console.log("F2 pressed - hasCached:", hasCached, "volumes:", freshVolumes.map(v => ({ id: v.volume_id, is_cached: v.is_cached })));
+          
+          if (hasCached) {
+            // Remove cached volumes
+            try {
+              const result = await removeSeriesCache(series_id);
+              showToast(result.message || "Cache removed successfully", "success", 3000);
+              // Refresh volumes to update cache status
+              getSeries();
+            } catch (error) {
+              showToast("Failed to remove cache", "error", 3000);
+            }
+          } else {
+            // Start caching
+            try {
+              await fetchCacheSeries(series_id);
+              showToast("Caching started", "info", 3000);
+            } catch (error) {
+              showToast("Failed to start caching", "error", 3000);
+            }
+          }
         }
-        startCaching(id);
+        toggleCache(id);
         break;
       default:
         console.log(`Key pressed: ${event.key}`);
@@ -155,7 +190,7 @@ const Series: React.FC = () => {
           Volumes
         </div>
         <div className="text-l text-white mb-2 text-center bg-black bg-opacity-50 py-1">
-          F1/Y - mark volume as read, F2/X - start cache all volumes
+          F1/Y - mark volume as read, F2/X - {volumes.some(v => v.is_cached) ? "remove cached volumes" : "start cache all volumes"}
         </div>
 
         <div 

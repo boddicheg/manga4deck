@@ -23,6 +23,7 @@ export interface ServerStatusInterface {
   ip: string;
   logged_as: string;
   cache: number;
+  offline_mode: boolean;
 }
 
 export const fetchServerStatus = async (): Promise<ServerStatusInterface> => {
@@ -100,6 +101,21 @@ export const fetchCacheSeries = async (
   return await response.json();
 };
 
+export const removeSeriesCache = async (
+  id: string | undefined
+): Promise<{ status: string; message: string; series_id: number }> => {
+  const response = await fetch("http://localhost:11337/api/cache/remove/" + id, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    throw new Error("Network response was not ok");
+  }
+  return await response.json();
+};
+
 export const fetchReadVolume = async (
   series_id: string | undefined,
   volume_id: string | undefined
@@ -159,6 +175,19 @@ export interface ServerSettingsResponseInterface {
     has_password?: boolean;
   };
 }
+
+export const toggleOfflineMode = async (): Promise<{ offline_mode: boolean; message: string }> => {
+  const response = await fetch("http://localhost:11337/api/toggle-offline-mode", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    throw new Error("Network response was not ok");
+  }
+  return await response.json();
+};
 
 export const updateServerSettings = async (
   settings: UpdateServerSettingsInterface
