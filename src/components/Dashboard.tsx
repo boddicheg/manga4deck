@@ -17,7 +17,7 @@ const Dashboard: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [, setError] = useState<string | null>(null);
   const navigate = useNavigate();
-  const fetchInterval = 5000; // Fetch every 5 seconds
+  const fetchInterval = 5000; // Refresh every 5 seconds
 
   // Function to show different types of toasts for demonstration
   // const showDemoToasts = () => {
@@ -173,10 +173,25 @@ const Dashboard: React.FC = () => {
     
     // Key press events
     window.addEventListener("keydown", handleKey);
+
+    // Keep server status updated (polling).
     const intervalId = setInterval(getServerStatus, fetchInterval);
+
+    // Also refresh when the app becomes active again.
+    const handleFocus = () => {
+      getServerStatus();
+    };
+    const handleVisibilityChange = () => {
+      if (!document.hidden) getServerStatus();
+    };
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
     return () => {
       window.removeEventListener("keydown", handleKey); // Clean up
       clearInterval(intervalId);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);
 

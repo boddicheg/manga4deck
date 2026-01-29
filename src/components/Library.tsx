@@ -105,13 +105,21 @@ const Library: React.FC = () => {
   useEffect(() => {
     getSeries();
     window.addEventListener("keydown", handleKey);
-    // Refresh series periodically to update progress
-    const intervalId = setInterval(() => {
+
+    // Refresh when the app becomes active again (instead of polling).
+    const handleFocus = () => {
       getSeries();
-    }, 5000); // Refresh every 5 seconds
+    };
+    const handleVisibilityChange = () => {
+      if (!document.hidden) getSeries();
+    };
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
     return () => {
       window.removeEventListener("keydown", handleKey); // Clean up
-      clearInterval(intervalId);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [getSeries]); // Use getSeries as dependency (which depends on id)
 
