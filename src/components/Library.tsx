@@ -273,7 +273,7 @@ const Library: React.FC = () => {
           ))}
 
           {series.map((serie, index) => (
-            <div key={index} className="flex justify-center">
+            <div key={serie.id} className="flex justify-center">
               <div
                 data-route={`/series/${serie.id}`}
                 ref={(el) => (divRefs.current[index] = el)}

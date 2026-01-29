@@ -17,7 +17,6 @@ const LogViewer: React.FC<LogViewerProps> = ({ isOpen, onClose }) => {
     try {
       setLoading(true);
       setError(null);
-      console.log("Fetching logs from backend...");
       
       // Add a timestamp to avoid caching
       const timestamp = new Date().getTime();
@@ -25,7 +24,6 @@ const LogViewer: React.FC<LogViewerProps> = ({ isOpen, onClose }) => {
       
       if (response.ok) {
         const data = await response.json();
-        console.log(`Received logs:`, data);
         
         if (data.logs) {
           setLogs(data.logs);
@@ -33,11 +31,9 @@ const LogViewer: React.FC<LogViewerProps> = ({ isOpen, onClose }) => {
           setLogs([]);
         }
       } else {
-        console.error("Failed to fetch logs:", response.statusText);
         setError(`Failed to fetch logs: ${response.statusText}`);
       }
     } catch (error) {
-      console.error("Error fetching logs:", error);
       setError(`Error fetching logs: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setLoading(false);
@@ -80,7 +76,7 @@ const LogViewer: React.FC<LogViewerProps> = ({ isOpen, onClose }) => {
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-zinc-900 w-3/4 h-3/4 rounded-lg shadow-lg flex flex-col">
         <div className="flex justify-between items-center p-4 border-b border-zinc-700">
-          <h2 className="text-xl text-white font-bold">Python Backend Logs</h2>
+          <h2 className="text-xl text-white font-bold">Backend Logs</h2>
           <div className="flex items-center space-x-4">
             <input
               type="text"

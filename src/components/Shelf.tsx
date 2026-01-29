@@ -210,7 +210,7 @@ const Shelf: React.FC = () => {
           ))}
 
           {libraries.map((library, index) => (
-            <div key={index} className="flex justify-center">
+            <div key={library.id} className="flex justify-center">
               <div
                 data-route={"/library/" + library.id}
                 ref={(el) => (divRefs.current[index] = el)}

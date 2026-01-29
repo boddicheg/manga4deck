@@ -302,7 +302,7 @@ const Series: React.FC = () => {
           ))}
 
           {volumes.map((volume, index) => (
-            <div key={index} className="flex justify-center">
+            <div key={volume.volume_id} className="flex justify-center">
               <div
                 data-route={`/viewer/${volume.series_id}/${volume.volume_id}/${volume.chapter_id}/${volume.pages}/${volume.read}`}
                 data-key={volume.volume_id}
