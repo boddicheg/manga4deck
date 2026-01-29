@@ -36,14 +36,26 @@ const Library: React.FC = () => {
 
   const getSeries = useCallback(async () => {
     try {
+      // Keep current selection stable across list reordering
+      const currentSelectedId =
+        divRefs.current[currentIndexRef.current]
+          ?.getAttribute("data-route")
+          ?.split("/")
+          .pop() || null;
+
       const data = await fetchSeries(id);
-      setSeries(data);
+      const ordered = [
+        ...data.filter((s) => s.read < 100),
+        ...data.filter((s) => s.read === 100),
+      ];
+      setSeries(ordered);
+
       if (firstLoadRef.current) {
         const lastOpenedKey = `lastOpenedSeries`;
         const lastOpenedSeriesId = localStorage.getItem(lastOpenedKey);
         let idx = 0;
         if (lastOpenedSeriesId) {
-          const foundIdx = data.findIndex(s => String(s.id) === lastOpenedSeriesId);
+          const foundIdx = ordered.findIndex(s => String(s.id) === lastOpenedSeriesId);
           if (foundIdx !== -1) idx = foundIdx;
         }
         setCurrentIndex(idx);
@@ -55,6 +67,11 @@ const Library: React.FC = () => {
           }
         }, 100);
         firstLoadRef.current = false;
+      } else if (currentSelectedId) {
+        const foundIdx = ordered.findIndex((s) => String(s.id) === currentSelectedId);
+        if (foundIdx !== -1 && foundIdx !== currentIndexRef.current) {
+          setCurrentIndex(foundIdx);
+        }
       }
     } catch (err) {
       if (err instanceof Error) {
@@ -221,80 +238,93 @@ const Library: React.FC = () => {
           }}
         />
   
-        <div className="grid grid-cols-8 gap-x-4 gap-y-16 p-4 relative">
-          {/* Create wooden shelves for each row */}
-          {Array.from({ length: Math.ceil(series.length / 8) }).map((_, rowIndex) => (
-            <div 
-              key={`shelf-${rowIndex}`}
-              className="absolute left-0 right-0"
-              style={{ 
-                height: '32px',
-                // Calculate position: 
-                // - Each row is 200px (item height)
-                // - Plus 64px (gap-y-16 = 4rem = 64px)
-                // - Plus 10px offset from the bottom of items
-                top: `${rowIndex * (200 + 64) + 210}px`,
-                zIndex: 1,
-                background: 'linear-gradient(to bottom, #8B4513 0%, #654321 100%)',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.3), inset 0 1px 1px rgba(255,255,255,0.1)'
-              }}
-            >
-              {/* Wood grain texture overlay */}
-              <div className="absolute inset-0" 
-                style={{
-                  backgroundImage: `
-                    repeating-linear-gradient(
-                      90deg,
-                      transparent 0px,
-                      transparent 2px,
-                      rgba(0,0,0,0.1) 2px,
-                      rgba(0,0,0,0.1) 4px
-                    )
-                  `,
-                  opacity: 0.5
-                }}
-              />
-              {/* Shelf front face */}
-              <div 
-                className="absolute bottom-0 left-0 right-0 h-6"
-                style={{
-                  background: 'linear-gradient(to bottom, #654321, #4A3219)',
-                  borderTop: '1px solid rgba(255,255,255,0.1)',
-                  boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.4)'
-                }}
-              />
-              {/* Shelf top highlight */}
-              <div className="absolute top-0 left-0 right-0 h-[1px] bg-[rgba(255,255,255,0.15)]" />
-              {/* Shelf bottom shadow */}
-              <div className="absolute bottom-[-4px] left-0 right-0 h-4" style={{
-                background: 'linear-gradient(to bottom, rgba(0,0,0,0.3), transparent)'
-              }} />
-            </div>
-          ))}
+        {(() => {
+          const inProgressSeries = series.filter((s) => s.read < 100);
+          const completedSeries = series.filter((s) => s.read === 100);
 
-          {series.map((serie, index) => (
-            <div key={serie.id} className="flex justify-center">
-              <div
-                data-route={`/series/${serie.id}`}
-                ref={(el) => (divRefs.current[index] = el)}
-                tabIndex={-1}
-                className={`relative rounded focus:outline-none ${
-                  currentIndex === index
-                    ? "border-2 border-black shadow-lg"
-                    : "border border-black/30"
-                }`}
-                style={{
-                  width: "150px",
-                  height: "200px",
-                  backgroundImage: `url(http://localhost:11337/api/series-cover/${serie.id})`,
-                  backgroundSize: "cover",
-                  backgroundPosition: "center",
-                  overflow: "hidden",
-                  boxShadow: currentIndex === index
-                    ? "8px -8px 12px rgba(0,0,0,0.4), 3px -3px 6px rgba(0,0,0,0.3), inset 0 0 0 1px rgba(255,255,255,0.1)"
-                    : "8px -8px 8px rgba(0,0,0,0.2), 3px -3px 4px rgba(0,0,0,0.15), inset 0 0 0 1px rgba(255,255,255,0.1)"
-                }}
-              >
+          const renderSection = (
+            title: string,
+            items: Array<SeriesResponseInterface>,
+            indexOffset: number
+          ) => {
+            if (items.length === 0) return null;
+
+            return (
+              <div className="mb-10">
+                <div className="px-4 pt-4 text-white font-bold text-lg drop-shadow">
+                  {title} <span className="text-white/70">({items.length})</span>
+                </div>
+
+                <div className="grid grid-cols-8 gap-x-4 gap-y-16 p-4 relative">
+                  {Array.from({ length: Math.ceil(items.length / GRID_COLUMNS) }).map((_, rowIndex) => (
+                    <div
+                      key={`${title}-shelf-${rowIndex}`}
+                      className="absolute left-0 right-0"
+                      style={{
+                        height: "32px",
+                        top: `${rowIndex * (200 + 64) + 210}px`,
+                        zIndex: 1,
+                        background: "linear-gradient(to bottom, #8B4513 0%, #654321 100%)",
+                        boxShadow: "0 2px 4px rgba(0,0,0,0.3), inset 0 1px 1px rgba(255,255,255,0.1)",
+                      }}
+                    >
+                      <div
+                        className="absolute inset-0"
+                        style={{
+                          backgroundImage: `
+                            repeating-linear-gradient(
+                              90deg,
+                              transparent 0px,
+                              transparent 2px,
+                              rgba(0,0,0,0.1) 2px,
+                              rgba(0,0,0,0.1) 4px
+                            )
+                          `,
+                          opacity: 0.5,
+                        }}
+                      />
+                      <div
+                        className="absolute bottom-0 left-0 right-0 h-6"
+                        style={{
+                          background: "linear-gradient(to bottom, #654321, #4A3219)",
+                          borderTop: "1px solid rgba(255,255,255,0.1)",
+                          boxShadow: "inset 0 2px 4px rgba(0,0,0,0.4)",
+                        }}
+                      />
+                      <div className="absolute top-0 left-0 right-0 h-[1px] bg-[rgba(255,255,255,0.15)]" />
+                      <div
+                        className="absolute bottom-[-4px] left-0 right-0 h-4"
+                        style={{
+                          background: "linear-gradient(to bottom, rgba(0,0,0,0.3), transparent)",
+                        }}
+                      />
+                    </div>
+                  ))}
+
+                  {items.map((serie, localIndex) => {
+                    const index = indexOffset + localIndex;
+                    return (
+                      <div key={serie.id} className="flex justify-center">
+                        <div
+                          data-route={`/series/${serie.id}`}
+                          ref={(el) => (divRefs.current[index] = el)}
+                          tabIndex={-1}
+                          className={`relative rounded focus:outline-none ${
+                            currentIndex === index ? "border-2 border-black shadow-lg" : "border border-black/30"
+                          }`}
+                          style={{
+                            width: "150px",
+                            height: "200px",
+                            backgroundImage: `url(http://localhost:11337/api/series-cover/${serie.id})`,
+                            backgroundSize: "cover",
+                            backgroundPosition: "center",
+                            overflow: "hidden",
+                            boxShadow:
+                              currentIndex === index
+                                ? "8px -8px 12px rgba(0,0,0,0.4), 3px -3px 6px rgba(0,0,0,0.3), inset 0 0 0 1px rgba(255,255,255,0.1)"
+                                : "8px -8px 8px rgba(0,0,0,0.2), 3px -3px 4px rgba(0,0,0,0.15), inset 0 0 0 1px rgba(255,255,255,0.1)",
+                          }}
+                        >
                 {/* Progress bar at the top */}
                 <div 
                   className="absolute top-0 left-0 w-full h-1.5"
@@ -356,10 +386,22 @@ const Library: React.FC = () => {
                     {serie.title}
                   </div>
                 </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            );
+          };
+
+          return (
+            <>
+              {renderSection("In progress", inProgressSeries, 0)}
+              {renderSection("Completed", completedSeries, inProgressSeries.length)}
+            </>
+          );
+        })()}
       </div>
 
       <style>
