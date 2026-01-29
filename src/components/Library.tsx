@@ -278,10 +278,10 @@ const Library: React.FC = () => {
                 data-route={`/series/${serie.id}`}
                 ref={(el) => (divRefs.current[index] = el)}
                 tabIndex={-1}
-                className={`relative rounded focus:outline-none transform transition-all duration-300 ${
+                className={`relative rounded focus:outline-none ${
                   currentIndex === index
-                    ? "border-2 border-black shadow-[0_0_20px_rgba(255,215,0,0.6),0_0_40px_rgba(255,215,0,0.3)] scale-110 -translate-y-2 z-10 selected-series"
-                    : "hover:scale-105 hover:-translate-y-1"
+                    ? "border-2 border-black shadow-lg"
+                    : "border border-black/30"
                 }`}
                 style={{
                   width: "150px",
@@ -371,19 +371,6 @@ const Library: React.FC = () => {
             100% {
               transform: translateX(-200%);
             }
-          }
-          
-          @keyframes glowPulse {
-            0%, 100% {
-              box-shadow: 0 0 20px rgba(255, 215, 0, 0.6), 0 0 40px rgba(255, 215, 0, 0.3), 8px -8px 12px rgba(0,0,0,0.4);
-            }
-            50% {
-              box-shadow: 0 0 30px rgba(255, 215, 0, 0.8), 0 0 60px rgba(255, 215, 0, 0.5), 8px -8px 12px rgba(0,0,0,0.4);
-            }
-          }
-          
-          .selected-series {
-            animation: glowPulse 2s ease-in-out infinite;
           }
         `}
       </style>

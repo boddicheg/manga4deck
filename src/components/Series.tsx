@@ -310,10 +310,10 @@ const Series: React.FC = () => {
                 data-read={volume.read}
                 ref={(el) => (divRefs.current[index] = el)}
                 tabIndex={-1}
-                className={`relative rounded focus:outline-none transform transition-all duration-200 ${
+                className={`relative rounded focus:outline-none ${
                   currentIndex === index
-                    ? "border-2 border-black shadow-[0_0_15px_rgba(0,0,0,0.5)] scale-105 -translate-y-1"
-                    : "hover:scale-105 hover:-translate-y-1"
+                    ? "border-2 border-black shadow-lg"
+                    : "border border-black/30"
                 }`}
                 style={{
                   width: "150px",
