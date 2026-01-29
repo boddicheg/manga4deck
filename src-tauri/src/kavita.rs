@@ -44,8 +44,8 @@ fn get_appdir_path(relative_path: &str) -> String {
     datadir.to_string_lossy().into_owned()
 }
 
-const COVER_THUMB_WIDTH: u32 = 300;
-const COVER_THUMB_HEIGHT: u32 = 400;
+const COVER_THUMB_WIDTH: u32 = 150;
+const COVER_THUMB_HEIGHT: u32 = 200;
 const COVER_JPEG_QUALITY: u8 = 75;
 
 fn cache_folder_path() -> PathBuf {
