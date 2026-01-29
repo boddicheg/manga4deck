@@ -19,8 +19,6 @@ const Series: React.FC = () => {
   const currentIndexRef = useRef(currentIndex);
   const firstLoadRef = useRef(true);
 
-  const fetchInterval = 1000;
-
   const navigate = useNavigate();
   const navigateTo = (uri: string | null | undefined) => {
     if (uri) navigate(uri);
@@ -171,10 +169,21 @@ const Series: React.FC = () => {
   useEffect(() => {
     getSeries();
     window.addEventListener("keydown", handleKey);
-    const intervalId = setInterval(getSeries, fetchInterval);
+
+    // Refresh volumes when the app becomes active again (instead of polling).
+    const handleFocus = () => {
+      getSeries();
+    };
+    const handleVisibilityChange = () => {
+      if (!document.hidden) getSeries();
+    };
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
     return () => {
       window.removeEventListener("keydown", handleKey);
-      clearInterval(intervalId);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);
 
