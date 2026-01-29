@@ -24,22 +24,16 @@ const Series: React.FC = () => {
     if (uri) navigate(uri);
   };
 
-  const cycleFocus = (direction: "next" | "prev") => {
-    const nextIndex =
-      direction === "next"
-        ? currentIndexRef.current + 1 >= volumesSizeRef.current
-          ? volumesSizeRef.current - 1
-          : currentIndexRef.current + 1
-        : currentIndexRef.current - 1 < 0
-          ? 0
-          : currentIndexRef.current - 1;
+  const GRID_COLUMNS = 8;
 
+  const moveFocusBy = (delta: number) => {
+    const size = volumesSizeRef.current;
+    if (size <= 0) return;
+
+    const nextIndex = Math.max(0, Math.min(size - 1, currentIndexRef.current + delta));
     setCurrentIndex(nextIndex);
     const element = divRefs.current[nextIndex];
-    if (element) {
-      element.focus();
-      // Scrolling is handled by useEffect when currentIndex changes
-    }
+    if (element) element.focus();
   };
 
   const getSeries = async () => {
@@ -95,10 +89,16 @@ const Series: React.FC = () => {
   ) {
     switch (event.key) {
       case "ArrowLeft":
-        cycleFocus("prev");
+        moveFocusBy(-1);
         break;
       case "ArrowRight":
-        cycleFocus("next");
+        moveFocusBy(1);
+        break;
+      case "ArrowUp":
+        moveFocusBy(-GRID_COLUMNS);
+        break;
+      case "ArrowDown":
+        moveFocusBy(GRID_COLUMNS);
         break;
       case "Enter":
         enterDirectory();

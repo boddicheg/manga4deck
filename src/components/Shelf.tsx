@@ -46,18 +46,15 @@ const Shelf: React.FC = () => {
     if (uri) navigate(uri);
   };
 
-  const cycleFocus = (direction: "next" | "prev") => {
-    const nextIndex =
-      direction === "next"
-        ? currentIndex + 1 >= divRefs.current.length
-          ? divRefs.current.length - 1
-          : currentIndex + 1
-        : currentIndex - 1 < 0
-        ? 0
-        : currentIndex - 1;
+  const GRID_COLUMNS = 8;
 
+  const moveFocusBy = (delta: number) => {
+    const size = divRefs.current.length;
+    if (size <= 0) return;
+
+    const nextIndex = Math.max(0, Math.min(size - 1, currentIndexRef.current + delta));
     setCurrentIndex(nextIndex);
-    divRefs.current[nextIndex]?.focus(); 
+    divRefs.current[nextIndex]?.focus();
   };
 
   const enterDirectory = () => {
@@ -69,10 +66,16 @@ const Shelf: React.FC = () => {
   const handleKey = (event: KeyboardEvent): void => {
     switch (event.key) {
       case "ArrowLeft":
-        cycleFocus("prev");
+        moveFocusBy(-1);
         break;
       case "ArrowRight":
-        cycleFocus("next");
+        moveFocusBy(1);
+        break;
+      case "ArrowUp":
+        moveFocusBy(-GRID_COLUMNS);
+        break;
+      case "ArrowDown":
+        moveFocusBy(GRID_COLUMNS);
         break;
       case "Enter":
         enterDirectory();
