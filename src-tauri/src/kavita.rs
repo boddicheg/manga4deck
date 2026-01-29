@@ -1,4 +1,4 @@
-use std::path::{PathBuf};
+use std::path::{Path, PathBuf};
 use std::fs;
 use serde::{Serialize, Deserialize};
 use serde_json::json;
@@ -7,6 +7,7 @@ use md5::{Md5, Digest};
 use crate::logger::{
     info
 };
+use reqwest::header;
 
 use tokio::time::{timeout, Duration};
 
@@ -41,6 +42,35 @@ fn get_appdir_path(relative_path: &str) -> String {
     
     datadir = datadir.join(relative_path);
     datadir.to_string_lossy().into_owned()
+}
+
+const COVER_THUMB_WIDTH: u32 = 300;
+const COVER_THUMB_HEIGHT: u32 = 400;
+const COVER_JPEG_QUALITY: u8 = 75;
+
+fn cache_folder_path() -> PathBuf {
+    let cache_folder = get_datadir().join("manga4deck-cache").join("cache");
+    if !cache_folder.exists() {
+        fs::create_dir_all(&cache_folder).expect("Failed to create cache directory");
+    }
+    cache_folder
+}
+
+fn optimize_cover_to_jpeg_bytes(original: &[u8]) -> Option<Vec<u8>> {
+    use image::codecs::jpeg::JpegEncoder;
+    use image::imageops::FilterType;
+    use image::ColorType;
+
+    let img = image::load_from_memory(original).ok()?;
+    // Resize similar to CSS background-size: cover (crop center, no distortion).
+    let thumb = img.resize_to_fill(COVER_THUMB_WIDTH, COVER_THUMB_HEIGHT, FilterType::CatmullRom);
+    let rgb = thumb.to_rgb8();
+    let (w, h) = rgb.dimensions();
+
+    let mut out: Vec<u8> = Vec::new();
+    let mut encoder = JpegEncoder::new_with_quality(&mut out, COVER_JPEG_QUALITY);
+    encoder.encode(&rgb, w, h, ColorType::Rgb8.into()).ok()?;
+    Some(out)
 }
 
 pub fn get_cache_size(delimiter: u64) -> u64 {
@@ -398,10 +428,20 @@ impl Kavita {
             let body = response.text().await?;
             let data: serde_json::Value = serde_json::from_str(&body)?;
             let series: Vec<Series> = data.as_array().unwrap().iter().map(|v| Series {
+                // Avoid panics if Kavita returns 0 pages
+                // (some series can legitimately have 0 pages while metadata is still processing).
                 id: v["id"].as_i64().unwrap_or(0) as i32,
                 library_id: library_id.clone(),
                 title: v["name"].as_str().unwrap_or("").to_string(),
-                read: v["pagesRead"].as_i64().unwrap_or(0) as i32 * 100 / v["pages"].as_i64().unwrap_or(0) as i32,
+                read: {
+                    let pages_read = v["pagesRead"].as_i64().unwrap_or(0) as i32;
+                    let pages = v["pages"].as_i64().unwrap_or(0) as i32;
+                    if pages <= 0 {
+                        0
+                    } else {
+                        (pages_read * 100) / pages
+                    }
+                },
                 pages: v["pages"].as_i64().unwrap_or(0) as i32,
             }).collect();
             for series in series {
@@ -419,7 +459,7 @@ impl Kavita {
         let mut series = self.db.get_series(library_id)?;
         // return only cached series
         if self.offline_mode {
-            series = series.into_iter().filter(|s| !self.is_series_cached(s.id)).collect();
+            series = series.into_iter().filter(|s| self.is_series_cached(s.id)).collect();
         }
         // sort series by title and return sorted series
         series.sort_by_key(|s| s.title.clone());
@@ -427,31 +467,77 @@ impl Kavita {
     }
 
     pub async fn get_series_cover(&self, series_id: &i32) -> Result<SeriesCover, Box<dyn std::error::Error>> {
-        if !self.offline_mode {
-            let url = format!("http://{}/api/image/series-cover?seriesId={}&apiKey={}", self.ip, series_id, self.api_key);
-            let client = reqwest::Client::new();
-            let response = client.get(url)
-                // .header("Authorization", format!("Bearer {}", self.token))
-                .header("Content-Type", "image/png")
-                .send()
-                .await?;
-            let body = response.bytes().await?;
-            let hash = generate_hash_from_now();
-            let cache_folder = get_datadir().join("manga4deck-cache").join("cache");    
-            let filename = cache_folder.join(format!("{}.png", hash));
-            fs::write(&filename, body)?;
-            
-            let series_cover = SeriesCover {
-                series_id: *series_id,
-                file: filename.to_string_lossy().into_owned(),
-            };
-            self.db.add_series_cover(&series_cover)?;
+        // Prefer existing cached cover (and migrate old large PNGs to WebP).
+        if let Ok(existing) = self.db.get_series_cover(series_id) {
+            if Path::new(&existing.file).exists() {
+                if existing.file.ends_with(".jpg") || existing.file.ends_with(".jpeg") {
+                    return Ok(existing);
+                }
+                // Migrate/optimize old cached cover file to JPEG thumbnail.
+                if let Ok(bytes) = fs::read(&existing.file) {
+                    if let Some(jpg) = optimize_cover_to_jpeg_bytes(&bytes) {
+                        let hash = generate_hash_from_now();
+                        let filename = cache_folder_path().join(format!("{}.jpg", hash));
+                        fs::write(&filename, jpg)?;
+                        let updated = SeriesCover {
+                            series_id: *series_id,
+                            file: filename.to_string_lossy().into_owned(),
+                        };
+                        self.db.add_series_cover(&updated)?;
+                        let _ = fs::remove_file(&existing.file);
+                        return Ok(updated);
+                    }
+                }
+                // If optimization fails, serve the existing file as-is.
+                return Ok(existing);
+            }
         }
-        else {
-            info(&format!("Offline mode! Getting series cover from database"));
+
+        if self.offline_mode {
+            info("Offline mode! Series cover not available in cache.");
+            return Err("Series cover not available offline".into());
         }
-        
-        let series_cover = self.db.get_series_cover(series_id)?;
+
+        let url = format!(
+            "http://{}/api/image/series-cover?seriesId={}&apiKey={}",
+            self.ip, series_id, self.api_key
+        );
+        let client = reqwest::Client::new();
+        let response = client
+            .get(url)
+            .header("Accept", "image/*")
+            .send()
+            .await?;
+
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+
+        let body = response.bytes().await?;
+
+        let (out_bytes, ext) = if let Some(jpg) = optimize_cover_to_jpeg_bytes(&body) {
+            (jpg, "jpg")
+        } else if content_type.contains("jpeg") {
+            (body.to_vec(), "jpg")
+        } else if content_type.contains("png") {
+            (body.to_vec(), "png")
+        } else {
+            (body.to_vec(), "bin")
+        };
+
+        let hash = generate_hash_from_now();
+        let filename = cache_folder_path().join(format!("{}.{}", hash, ext));
+        fs::write(&filename, out_bytes)?;
+
+        let series_cover = SeriesCover {
+            series_id: *series_id,
+            file: filename.to_string_lossy().into_owned(),
+        };
+        self.db.add_series_cover(&series_cover)?;
+
         Ok(series_cover)
     }
 
@@ -459,71 +545,199 @@ impl Kavita {
     // Volume methods
     pub async fn pull_volumes(&self, series_id: &i32) -> Result<(), Box<dyn std::error::Error>> {
         let client = reqwest::Client::new();
-        let response = client.get(format!("http://{}/api/series/series-detail?seriesId={}&apiKey={}", self.ip, series_id, self.api_key))
+        let response = client
+            .get(format!(
+                "http://{}/api/series/series-detail?seriesId={}&apiKey={}",
+                self.ip, series_id, self.api_key
+            ))
             .header("Accept", "application/json")
             .header("Authorization", format!("Bearer {}", self.token))
             .send()
             .await?;
+        let status = response.status();
         let body = response.text().await?;
+        if !status.is_success() {
+            info(&format!(
+                "pull_volumes(series_id={}) failed: http_status={} body_snippet={}",
+                series_id,
+                status,
+                body.chars().take(200).collect::<String>()
+            ));
+            return Err(format!("series-detail request failed with status {}", status).into());
+        }
+
         let data: serde_json::Value = serde_json::from_str(&body)?;
 
-        if data["chapters"].is_array() && data["chapters"].as_array().map_or(0, |arr| arr.len()) > 0 {
-            let volumes: Vec<Volume> = data["volumes"].as_array().unwrap_or(&Vec::new()).iter().map(|v| Volume {
+        let top_level_chapter_id = data["chapters"]
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|c| c["id"].as_i64())
+            .unwrap_or(0) as i32;
+
+        let mut inserted = 0usize;
+        let volumes_arr = data["volumes"]
+            .as_array()
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+        for v in volumes_arr {
+            let chapter_id = v["chapters"]
+                .as_array()
+                .and_then(|arr| arr.first())
+                .and_then(|c| c["id"].as_i64())
+                .unwrap_or(top_level_chapter_id as i64) as i32;
+
+            // If we can't resolve a chapter id, this volume isn't readable anyway.
+            if chapter_id <= 0 {
+                continue;
+            }
+
+            let volume = Volume {
                 id: v["id"].as_i64().unwrap_or(0) as i32,
                 series_id: series_id.clone(),
-                chapter_id: v["chapters"][0]["id"].as_i64().unwrap_or(0) as i32,
+                chapter_id,
                 volume_id: v["id"].as_i64().unwrap_or(0) as i32,
                 title: v["name"].as_str().unwrap_or("").to_string(),
                 read: v["pagesRead"].as_i64().unwrap_or(0) as i32,
                 pages: v["pages"].as_i64().unwrap_or(0) as i32,
                 is_cached: false,
-            }).collect();   
-            for volume in volumes {
-                self.db.add_volume(&volume)?;
-            }
+            };
+            self.db.add_volume(&volume)?;
+            inserted += 1;
+        }
+
+        if inserted == 0 {
+            info(&format!(
+                "pull_volumes(series_id={}) inserted 0 volumes (volumes_json_len={}, top_level_chapter_id={})",
+                series_id,
+                volumes_arr.len(),
+                top_level_chapter_id
+            ));
         }
         Ok(())
     }   
 
     pub async fn get_volumes(&self, series_id: &i32) -> Result<Vec<Volume>, Box<dyn std::error::Error>> {
+        let mut last_pull_err: Option<String> = None;
+
         if !self.offline_mode {
-            self.pull_volumes(series_id).await?;
+            if let Err(e) = self.pull_volumes(series_id).await {
+                last_pull_err = Some(e.to_string());
+                info(&format!("Failed to pull volumes for series {}: {}", series_id, e));
+            }
         }
+
         let mut volumes = self.db.get_volumes(series_id)?;
-        if self.offline_mode {
-            volumes = volumes.into_iter().filter(|v| self.is_volume_cached(v.id)).collect();
+
+        // If the remote fetch failed AND we have no local data, retry once before returning an error.
+        if !self.offline_mode && volumes.is_empty() && last_pull_err.is_some() {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            if let Err(e) = self.pull_volumes(series_id).await {
+                last_pull_err = Some(e.to_string());
+                info(&format!("Retry pull_volumes failed for series {}: {}", series_id, e));
+            } else {
+                last_pull_err = None;
+            }
+            volumes = self.db.get_volumes(series_id)?;
+            if volumes.is_empty() && last_pull_err.is_some() {
+                return Err(format!(
+                    "Failed to fetch volumes for series {} (db empty): {}",
+                    series_id,
+                    last_pull_err.unwrap_or_else(|| "unknown".to_string())
+                )
+                .into());
+            }
         }
+
+        // In offline mode we still return the full volume list so it doesn't look like
+        // the series is "not loading". The UI already has `is_cached` to indicate if
+        // a volume is available for offline reading.
         // sort volumes by title and converted to int and return sorted volumes
         volumes.sort_by_key(|v| v.title.clone().replace(|c: char| !c.is_digit(10), "").parse::<i32>().unwrap_or(0));
         // Update is_cached for each volume
         for v in &mut volumes {
             v.is_cached = self.is_volume_cached(v.id);
         }
+        info(&format!(
+            "kavita.get_volumes(series_id={}, offline_mode={}) -> {} volumes",
+            series_id,
+            self.offline_mode,
+            volumes.len()
+        ));
         Ok(volumes)
     }
 
     pub async fn get_volume_cover(&self, volume_id: &i32) -> Result<VolumeCover, Box<dyn std::error::Error>> {
-        if !self.offline_mode {
-            let url = format!("http://{}/api/image/volume-cover?volumeId={}&apiKey={}", self.ip, volume_id, self.api_key);
-            let client = reqwest::Client::new();
-            let response = client.get(url)
-                .header("Content-Type", "image/png")
-                .send()
-                .await?;
-            let body = response.bytes().await?;
-            let hash = generate_hash_from_now();
-            let cache_folder = get_datadir().join("manga4deck-cache").join("cache");    
-            let filename = cache_folder.join(format!("{}.png", hash));
-            fs::write(&filename, body)?;
-            
-            let volume_cover = VolumeCover {
-                volume_id: *volume_id,
-                file: filename.to_string_lossy().into_owned(),
-            };
-            self.db.add_volume_cover(&volume_cover)?;
+        // Prefer existing cached cover (and migrate old large PNGs to WebP).
+        if let Ok(existing) = self.db.get_volume_cover(volume_id) {
+            if Path::new(&existing.file).exists() {
+                if existing.file.ends_with(".jpg") || existing.file.ends_with(".jpeg") {
+                    return Ok(existing);
+                }
+                // Migrate/optimize old cached cover file to JPEG thumbnail.
+                if let Ok(bytes) = fs::read(&existing.file) {
+                    if let Some(jpg) = optimize_cover_to_jpeg_bytes(&bytes) {
+                        let hash = generate_hash_from_now();
+                        let filename = cache_folder_path().join(format!("{}.jpg", hash));
+                        fs::write(&filename, jpg)?;
+                        let updated = VolumeCover {
+                            volume_id: *volume_id,
+                            file: filename.to_string_lossy().into_owned(),
+                        };
+                        self.db.add_volume_cover(&updated)?;
+                        let _ = fs::remove_file(&existing.file);
+                        return Ok(updated);
+                    }
+                }
+                // If optimization fails, serve the existing file as-is.
+                return Ok(existing);
+            }
         }
-        
-        let volume_cover = self.db.get_volume_cover(volume_id)?;
+
+        if self.offline_mode {
+            info("Offline mode! Volume cover not available in cache.");
+            return Err("Volume cover not available offline".into());
+        }
+
+        let url = format!(
+            "http://{}/api/image/volume-cover?volumeId={}&apiKey={}",
+            self.ip, volume_id, self.api_key
+        );
+        let client = reqwest::Client::new();
+        let response = client
+            .get(url)
+            .header("Accept", "image/*")
+            .send()
+            .await?;
+
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+
+        let body = response.bytes().await?;
+
+        let (out_bytes, ext) = if let Some(jpg) = optimize_cover_to_jpeg_bytes(&body) {
+            (jpg, "jpg")
+        } else if content_type.contains("jpeg") {
+            (body.to_vec(), "jpg")
+        } else if content_type.contains("png") {
+            (body.to_vec(), "png")
+        } else {
+            (body.to_vec(), "bin")
+        };
+
+        let hash = generate_hash_from_now();
+        let filename = cache_folder_path().join(format!("{}.{}", hash, ext));
+        fs::write(&filename, out_bytes)?;
+
+        let volume_cover = VolumeCover {
+            volume_id: *volume_id,
+            file: filename.to_string_lossy().into_owned(),
+        };
+        self.db.add_volume_cover(&volume_cover)?;
+
         Ok(volume_cover)
     }
     // -------------------------------------------------------------------------    

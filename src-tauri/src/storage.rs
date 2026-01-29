@@ -184,6 +184,11 @@ impl Database {
                 "INSERT INTO series_cover (series_id, file) VALUES (?, ?)",
                 [series_cover.series_id.to_string(), series_cover.file.to_string()],
             )?;
+        } else {
+            conn.execute(
+                "UPDATE series_cover SET file = ? WHERE series_id = ?",
+                [series_cover.file.to_string(), series_cover.series_id.to_string()],
+            )?;
         }
         Ok(())
     }
@@ -266,6 +271,11 @@ impl Database {
             conn.execute(
                 "INSERT INTO volumes_cover (volume_id, file) VALUES (?, ?)",
                 [volume_cover.volume_id.to_string(), volume_cover.file.to_string()],
+            )?;
+        } else {
+            conn.execute(
+                "UPDATE volumes_cover SET file = ? WHERE volume_id = ?",
+                [volume_cover.file.to_string(), volume_cover.volume_id.to_string()],
             )?;
         }
         Ok(())

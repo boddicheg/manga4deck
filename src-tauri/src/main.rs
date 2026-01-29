@@ -169,8 +169,13 @@ async fn get_series(
 ) -> (StatusCode, Json<Vec<Series>>) {
     // info(&format!("Getting series for library: {}", library_id));
     let kavita_guard = kavita.lock().await;
-    let series = kavita_guard.get_series(&library_id).await.unwrap();
-    (StatusCode::OK, Json(series))
+    match kavita_guard.get_series(&library_id).await {
+        Ok(series) => (StatusCode::OK, Json(series)),
+        Err(err) => {
+            info(&format!("Failed to get series for library {}: {}", library_id, err));
+            (StatusCode::OK, Json(Vec::new()))
+        }
+    }
 }
 
 async fn get_series_cover(
@@ -179,15 +184,36 @@ async fn get_series_cover(
 ) -> (StatusCode, Response) {
     // info(&format!("Getting series cover for series: {}", series_id));
     let kavita_guard = kavita.lock().await;
-    let series_cover = kavita_guard.get_series_cover(&series_id).await.unwrap();
-    let mut file = File::open(series_cover.file).unwrap();
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer).unwrap(); 
-    let response = Response::builder()
-        .header("Content-Type", "image/png")
-        .body(axum::body::Body::from(buffer))
-        .unwrap();
-    (StatusCode::OK, response)
+    match kavita_guard.get_series_cover(&series_id).await {
+        Ok(series_cover) => {
+            let content_type = if series_cover.file.ends_with(".webp") {
+                "image/webp"
+            } else if series_cover.file.ends_with(".jpg") || series_cover.file.ends_with(".jpeg") {
+                "image/jpeg"
+            } else if series_cover.file.ends_with(".png") {
+                "image/png"
+            } else {
+                "application/octet-stream"
+            };
+
+            match File::open(&series_cover.file) {
+                Ok(mut file) => {
+                    let mut buffer = Vec::new();
+                    if file.read_to_end(&mut buffer).is_err() {
+                        return (StatusCode::INTERNAL_SERVER_ERROR, Response::new(Body::from("Failed to read cover file")));
+                    }
+                    let response = Response::builder()
+                        .header("Content-Type", content_type)
+                        .header("Cache-Control", "public, max-age=31536000, immutable")
+                        .body(axum::body::Body::from(buffer))
+                        .unwrap();
+                    (StatusCode::OK, response)
+                }
+                Err(_) => (StatusCode::NOT_FOUND, Response::new(Body::from("Cover file not found"))),
+            }
+        }
+        Err(_) => (StatusCode::NOT_FOUND, Response::new(Body::from("Series cover not available"))),
+    }
 }
 
 async fn get_volume_cover(
@@ -196,15 +222,36 @@ async fn get_volume_cover(
 ) -> (StatusCode, Response) {
     // info(&format!("Getting volume cover for volume: {}", volume_id));
     let kavita_guard = kavita.lock().await;
-    let volume_cover = kavita_guard.get_volume_cover(&volume_id).await.unwrap();
-    let mut file = File::open(volume_cover.file).unwrap();
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer).unwrap(); 
-    let response = Response::builder()
-        .header("Content-Type", "image/png")
-        .body(axum::body::Body::from(buffer))
-        .unwrap();
-    (StatusCode::OK, response)
+    match kavita_guard.get_volume_cover(&volume_id).await {
+        Ok(volume_cover) => {
+            let content_type = if volume_cover.file.ends_with(".webp") {
+                "image/webp"
+            } else if volume_cover.file.ends_with(".jpg") || volume_cover.file.ends_with(".jpeg") {
+                "image/jpeg"
+            } else if volume_cover.file.ends_with(".png") {
+                "image/png"
+            } else {
+                "application/octet-stream"
+            };
+
+            match File::open(&volume_cover.file) {
+                Ok(mut file) => {
+                    let mut buffer = Vec::new();
+                    if file.read_to_end(&mut buffer).is_err() {
+                        return (StatusCode::INTERNAL_SERVER_ERROR, Response::new(Body::from("Failed to read cover file")));
+                    }
+                    let response = Response::builder()
+                        .header("Content-Type", content_type)
+                        .header("Cache-Control", "public, max-age=31536000, immutable")
+                        .body(axum::body::Body::from(buffer))
+                        .unwrap();
+                    (StatusCode::OK, response)
+                }
+                Err(_) => (StatusCode::NOT_FOUND, Response::new(Body::from("Cover file not found"))),
+            }
+        }
+        Err(_) => (StatusCode::NOT_FOUND, Response::new(Body::from("Volume cover not available"))),
+    }
 }
 
 async fn get_volumes(
@@ -213,8 +260,26 @@ async fn get_volumes(
 ) -> (StatusCode, Json<Vec<Volume>>) {
     // info(&format!("Getting volumes for series: {}", series_id));
     let kavita_guard = kavita.lock().await;
-    let volumes = kavita_guard.get_volumes(&series_id).await.unwrap();
-    (StatusCode::OK, Json(volumes))
+    match kavita_guard.get_volumes(&series_id).await {
+        Ok(volumes) => {
+            let sample: Vec<String> = volumes
+                .iter()
+                .take(5)
+                .map(|v| format!("{}:{}", v.id, v.title))
+                .collect();
+            info(&format!(
+                "get_volumes(series_id={}) -> {} volumes; sample: [{}]",
+                series_id,
+                volumes.len(),
+                sample.join(", ")
+            ));
+            (StatusCode::OK, Json(volumes))
+        }
+        Err(err) => {
+            info(&format!("Failed to get volumes for series {}: {}", series_id, err));
+            (StatusCode::SERVICE_UNAVAILABLE, Json(Vec::new()))
+        }
+    }
 }
 
 async fn get_picture(
