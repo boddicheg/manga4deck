@@ -1,10 +1,11 @@
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 use serde::Serialize;
+use std::collections::VecDeque;
 
 pub struct Logger {
     pub name: String,
-    buffer: Vec<String>,
+    buffer: VecDeque<String>,
 }
 
 #[derive(Serialize)]
@@ -17,7 +18,7 @@ impl Logger {
     pub fn new(name: &str) -> Self {
         Logger {
             name: name.to_string(),
-            buffer: Vec::with_capacity(1000),
+            buffer: VecDeque::with_capacity(1000),
         }
     }
 
@@ -26,13 +27,13 @@ impl Logger {
         println!("{}", formatted_message);
         
         if self.buffer.len() >= 1000 {
-            self.buffer.remove(0);
+            self.buffer.pop_front();
         }
-        self.buffer.push(formatted_message);
+        self.buffer.push_back(formatted_message);
     }
 
     pub fn get(&self) -> Vec<String> {
-        self.buffer.clone()
+        self.buffer.iter().cloned().collect()
     }
 }
 

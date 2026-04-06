@@ -135,6 +135,7 @@ pub struct Kavita {
     pub db: Database,
     pub token: String,
     pub logged_as: String,
+    pub kavita_version: Option<String>,
     pub offline_mode: bool,
     pub ip: String,
     pub api_key: String,
@@ -198,6 +199,7 @@ impl Kavita {
             db,
             token: String::new(),
             logged_as: String::new(),
+            kavita_version: None,
             offline_mode: true,
             ip: DEFAULT_IP.to_string(),
             api_key: DEFAULT_API_KEY.to_string(),
@@ -215,6 +217,10 @@ impl Kavita {
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
         self.db.get_setting(key)
+    }
+
+    pub fn get_series_library_id(&self, series_id: i32) -> Option<i32> {
+        self.db.get_series_library_id(series_id).ok().flatten()
     }
 
     pub fn set_websocket_sender(&mut self, sender: Arc<broadcast::Sender<serde_json::Value>>) {
@@ -273,8 +279,8 @@ impl Kavita {
     
         info(&format!("IP: {}", self.ip));
         info(&format!("Username: {}", username));
-        info(&format!("Password: {}", password));
-        info(&format!("API Key: {}", api_key));
+        info(&format!("Password: {}", if password.is_empty() { "<empty>" } else { "<set>" }));
+        info(&format!("API Key: {}", if api_key.is_empty() { "<empty>" } else { "<set>" }));
 
         // self.ip = "192.168.1.100:5001".to_string();
 
@@ -293,13 +299,16 @@ impl Kavita {
             Ok(Ok(resp)) => 
             {
                 let body = resp.text().await.unwrap();
-                info(&format!("Body: {}", body));
                 let data: serde_json::Value = serde_json::from_str(&body)?;
                 self.token = data["token"].as_str().unwrap_or("").to_string();
                 self.logged_as = data["username"].as_str().unwrap_or("").to_string();
                 self.api_key = data["apiKey"].as_str().unwrap_or("").to_string();
+                self.kavita_version = data["kavitaVersion"].as_str().map(|s| s.to_string());
                 self.offline_mode = false;
                 info(&format!("Logged as: {}", self.logged_as));
+                if let Some(v) = &self.kavita_version {
+                    info(&format!("Kavita version: {}", v));
+                }
                 // Send connection status notification
                 self.send_connection_status(false, &self.logged_as);
             },
@@ -307,6 +316,7 @@ impl Kavita {
                 self.offline_mode = true;
                 self.logged_as = "".to_string();
                 self.token = "".to_string();
+                self.kavita_version = None;
                 info(&format!("Failed to get token. Now in offline mode"));
                 // Send connection status notification
                 self.send_connection_status(true, "");
@@ -316,6 +326,7 @@ impl Kavita {
                 self.offline_mode = true;
                 self.logged_as = "".to_string();
                 self.token = "".to_string();
+                self.kavita_version = None;
                 info(&format!("Failed to get token. Now in offline mode"));
                 // Send connection status notification
                 self.send_connection_status(true, "");
@@ -774,16 +785,23 @@ impl Kavita {
             // Online mode: send to remote server
             let url = format!("http://{}/api/reader/progress", self.ip);
             let client = reqwest::Client::new();
-            let _ = client.post(url)
+            let resp = client.post(url)
                 .header("Authorization", format!("Bearer {}", self.token))
                 .json(&json!({
+                    "libraryId": progress.library_id,
                     "seriesId": progress.series_id,
                     "volumeId": progress.volume_id,
                     "chapterId": progress.chapter_id,
-                    "pageNum": progress.page,
+                    "pageNum": progress.page
                 }))
                 .send()
                 .await?;
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_else(|_| "<failed to read body>".to_string());
+            info(&format!(
+                "api/reader/progress response (save_progress): series_id={} volume_id={} chapter_id={} page={} status={} body={}",
+                progress.series_id, progress.volume_id, progress.chapter_id, progress.page, status, body
+            ));
         } else {
             // Offline mode: save to local database
             info(&format!("Saving progress offline: series_id={}, volume_id={}, chapter_id={}, page={}", 
@@ -816,22 +834,29 @@ impl Kavita {
             let response = client.post(&url)
                 .header("Authorization", format!("Bearer {}", self.token))
                 .json(&json!({
+                    "libraryId": progress.library_id,
                     "seriesId": progress.series_id,
                     "volumeId": progress.volume_id,
                     "chapterId": progress.chapter_id,
-                    "pageNum": progress.page,
+                    "pageNum": progress.page
                 }))
                 .send()
                 .await;
 
             match response {
                 Ok(resp) => {
-                    if resp.status().is_success() {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_else(|_| "<failed to read body>".to_string());
+                    info(&format!(
+                        "api/reader/progress response (upload_progress): series_id={} page={} status={} body={}",
+                        progress.series_id, progress.page, status, body
+                    ));
+                    if status.is_success() {
                         info(&format!("Successfully uploaded progress for series_id={}, page={}", 
                             progress.series_id, progress.page));
                     } else {
                         info(&format!("Failed to upload progress for series_id={}, page={}: status {}", 
-                            progress.series_id, progress.page, resp.status()));
+                            progress.series_id, progress.page, status));
                     }
                 }
                 Err(e) => {
@@ -900,17 +925,24 @@ impl Kavita {
             let response = client.post(&url)
                 .header("Authorization", format!("Bearer {}", token))
                 .json(&json!({
+                    "libraryId": progress.library_id,
                     "seriesId": progress.series_id,
                     "volumeId": progress.volume_id,
                     "chapterId": progress.chapter_id,
-                    "pageNum": progress.page,
+                    "pageNum": progress.page
                 }))
                 .send()
                 .await;
 
             match response {
                 Ok(resp) => {
-                    if resp.status().is_success() {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_else(|_| "<failed to read body>".to_string());
+                    info(&format!(
+                        "api/reader/progress response (upload_progress_background): series_id={} page={} status={} body={}",
+                        progress.series_id, progress.page, status, body
+                    ));
+                    if status.is_success() {
                         success_count += 1;
                         if success_count % 10 == 0 {
                             info(&format!("Uploaded {}/{} progress entries...", success_count, progress_count));
@@ -918,7 +950,7 @@ impl Kavita {
                     } else {
                         fail_count += 1;
                         info(&format!("Failed to upload progress for series_id={}, page={}: status {}", 
-                            progress.series_id, progress.page, resp.status()));
+                            progress.series_id, progress.page, status));
                     }
                 }
                 Err(e) => {

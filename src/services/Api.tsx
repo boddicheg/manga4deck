@@ -138,6 +138,23 @@ export const fetchUnReadVolume = async (
   return await response.json();
 };
 
+export const postProgress = async (
+  series_id: string | undefined,
+  volume_id: string | undefined,
+  chapter_id: string | undefined,
+  page: number,
+  options?: { keepalive?: boolean }
+): Promise<CommandStatusInterface> => {
+  const response = await fetch(
+    `http://localhost:11337/api/progress/${series_id}/${volume_id}/${chapter_id}/${page}`,
+    { method: "POST", keepalive: options?.keepalive ?? false }
+  );
+  if (!response.ok) {
+    throw new Error("Network response was not ok");
+  }
+  return await response.json();
+};
+
 export interface ServerSettingsInterface {
   ip: string;
   username: string;

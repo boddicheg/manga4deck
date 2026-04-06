@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { postProgress } from "../services/Api";
 
 interface ViewerParams {
   [id: string]: string | undefined;
@@ -17,6 +18,9 @@ const Viewer: React.FC = () => {
   const observerRef = useRef<IntersectionObserver | null>(null);
   const upKeyTimeoutRef = useRef<number | null>(null);
   const scrollObserverRef = useRef<IntersectionObserver | null>(null);
+  const progressSentRef = useRef(false);
+  const currentPageRef = useRef(+read!);
+  const upKeyCountRef = useRef(0);
 
   const getPageImage = (page: number) => {
     return "http://localhost:11337/api/picture/" + series_id + "/" + volume_id + "/" + chapter_id + "/" + page;
@@ -79,13 +83,37 @@ const Viewer: React.FC = () => {
     }
   };
 
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+  }, [currentPage]);
+
+  useEffect(() => {
+    upKeyCountRef.current = upKeyCount;
+  }, [upKeyCount]);
+
+  const flushProgressAndExit = async () => {
+    if (!progressSentRef.current) {
+      progressSentRef.current = true;
+      // Wait a little so navigation does not cancel the request.
+      await Promise.race([
+        postProgress(series_id, volume_id, chapter_id, currentPageRef.current),
+        new Promise((resolve) => setTimeout(resolve, 400)),
+      ]).catch(() => {
+        // ignore – we don't want to block exit on flaky network
+      });
+    }
+    navigate(-1);
+  };
+
   const handleKey = (event: KeyboardEvent): void => {
     if (event.key === "Backspace") {
-      navigate(-1);
+      void flushProgressAndExit();
     } else if (event.key === "ArrowUp") {
       // Check if user is at the top of the page
       if (window.scrollY <= 10) {
-        setUpKeyCount(prev => prev + 1);
+        const nextCount = upKeyCountRef.current + 1;
+        upKeyCountRef.current = nextCount;
+        setUpKeyCount(nextCount);
         
         // Clear existing timeout
         if (upKeyTimeoutRef.current) {
@@ -94,11 +122,12 @@ const Viewer: React.FC = () => {
         
         // Set new timeout to reset counter
         upKeyTimeoutRef.current = setTimeout(() => {
+          upKeyCountRef.current = 0;
           setUpKeyCount(0);
         }, 2000);
         
         // Load previous pages after 3 key presses
-        if (upKeyCount >= 2) {
+        if (nextCount >= 3) {
           handleLoadPrevious();
         }
       }
@@ -107,13 +136,31 @@ const Viewer: React.FC = () => {
 
   useEffect(() => {
     window.addEventListener("keydown", handleKey);
+    const handlePageHide = () => {
+      if (!progressSentRef.current) {
+        progressSentRef.current = true;
+        postProgress(series_id, volume_id, chapter_id, currentPageRef.current, { keepalive: true }).catch(() => {
+          // ignore
+        });
+      }
+    };
+    window.addEventListener("pagehide", handlePageHide);
     return () => {
       window.removeEventListener("keydown", handleKey);
+      window.removeEventListener("pagehide", handlePageHide);
       if (upKeyTimeoutRef.current) {
         clearTimeout(upKeyTimeoutRef.current);
       }
+
+      // Safety net: flush progress if the component unmounts without Backspace.
+      if (!progressSentRef.current) {
+        progressSentRef.current = true;
+        postProgress(series_id, volume_id, chapter_id, currentPageRef.current, { keepalive: true }).catch(() => {
+          // ignore
+        });
+      }
     };
-  }, [upKeyCount]);
+  }, []);
 
   useEffect(() => {
     const options = {
@@ -274,7 +321,7 @@ const Viewer: React.FC = () => {
                 Retry
               </button>
               <button 
-                onClick={() => navigate(-1)} 
+                onClick={() => void flushProgressAndExit()} 
                 className="bg-gray-500 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded ml-2"
               >
                 Go Back
