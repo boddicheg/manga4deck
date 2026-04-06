@@ -488,7 +488,7 @@ async fn serve_frontend() -> Result<Html<String>, StatusCode> {
 #[tokio::main]
 async fn start_server() {
     // Print app version and Tauri version on startup
-    info("🚀 Manga4Deck v0.5.15 - Starting up...");
+    info("🚀 Manga4Deck v0.5.16 - Starting up...");
     info(&format!("📦 Tauri version: {}", tauri::VERSION));
 
     // Create WebSocket broadcaster
