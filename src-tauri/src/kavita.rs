@@ -184,7 +184,15 @@ pub struct ReadProgress {
     pub series_id: i32,
     pub volume_id: i32,
     pub chapter_id: i32,
+    /// Zero-based page index (same as `/api/Reader/image?page=`).
     pub page: i32,
+}
+
+/// Kavita stores `pageNum` as `PagesRead`: 0 = none, and a chapter is complete when `pageNum >= chapter.Pages`.
+/// Reader images use zero-based indices, so we add one when posting progress.
+#[inline]
+fn kavita_progress_page_num(zero_based_page: i32) -> i32 {
+    zero_based_page.saturating_add(1)
 }
 
 impl Kavita {
@@ -781,6 +789,7 @@ impl Kavita {
     // -------------------------------------------------------------------------
     // Read Progress methods
     pub async fn save_progress(&self, progress: &ReadProgress) -> Result<(), Box<dyn std::error::Error>> {
+        let page_num = kavita_progress_page_num(progress.page);
         if !self.offline_mode {
             // Online mode: send to remote server
             let url = format!("http://{}/api/reader/progress", self.ip);
@@ -792,25 +801,31 @@ impl Kavita {
                     "seriesId": progress.series_id,
                     "volumeId": progress.volume_id,
                     "chapterId": progress.chapter_id,
-                    "pageNum": progress.page
+                    "pageNum": page_num
                 }))
                 .send()
                 .await?;
             let status = resp.status();
             let body = resp.text().await.unwrap_or_else(|_| "<failed to read body>".to_string());
-            info(&format!(
-                "api/reader/progress response (save_progress): series_id={} volume_id={} chapter_id={} page={} status={} body={}",
-                progress.series_id, progress.volume_id, progress.chapter_id, progress.page, status, body
-            ));
+            if status.as_u16() != 200 {
+                info(&format!(
+                    "api/reader/progress response (save_progress): series_id={} volume_id={} chapter_id={} page_idx={} pageNum={} status={} body={}",
+                    progress.series_id, progress.volume_id, progress.chapter_id, progress.page, page_num, status, body
+                ));
+            }
         } else {
             // Offline mode: save to local database
-            info(&format!("Saving progress offline: series_id={}, volume_id={}, chapter_id={}, page={}", 
-                progress.series_id, progress.volume_id, progress.chapter_id, progress.page));
+            info(&format!("Saving progress offline: series_id={}, volume_id={}, chapter_id={}, page_idx={}, pagesRead={}", 
+                progress.series_id, progress.volume_id, progress.chapter_id, progress.page, page_num));
             self.db.add_read_progress(progress)?;            
             // Update volume read pages in offline mode
             if let Ok(Some(mut volume)) = self.db.get_volume_by_id(progress.volume_id) {
-                // Update the read pages count for this volume
-                volume.read = progress.page;
+                // Align with Kavita `pagesRead` (same as online `pageNum`)
+                volume.read = if volume.pages > 0 {
+                    page_num.min(volume.pages)
+                } else {
+                    page_num
+                };
                 self.db.add_volume(&volume)?;
                 info(&format!("Updated volume {} read pages to {}", volume.id, volume.read));
             }
@@ -829,6 +844,7 @@ impl Kavita {
         let progress_count = all_progress.len();
         
         for progress in &all_progress {
+            let page_num = kavita_progress_page_num(progress.page);
             let url = format!("http://{}/api/reader/progress", self.ip);
             let client = reqwest::Client::new();
             let response = client.post(&url)
@@ -838,7 +854,7 @@ impl Kavita {
                     "seriesId": progress.series_id,
                     "volumeId": progress.volume_id,
                     "chapterId": progress.chapter_id,
-                    "pageNum": progress.page
+                    "pageNum": page_num
                 }))
                 .send()
                 .await;
@@ -847,10 +863,12 @@ impl Kavita {
                 Ok(resp) => {
                     let status = resp.status();
                     let body = resp.text().await.unwrap_or_else(|_| "<failed to read body>".to_string());
-                    info(&format!(
-                        "api/reader/progress response (upload_progress): series_id={} page={} status={} body={}",
-                        progress.series_id, progress.page, status, body
-                    ));
+                    if status.as_u16() != 200 {
+                        info(&format!(
+                            "api/reader/progress response (upload_progress): series_id={} page_idx={} pageNum={} status={} body={}",
+                            progress.series_id, progress.page, page_num, status, body
+                        ));
+                    }
                     if status.is_success() {
                         info(&format!("Successfully uploaded progress for series_id={}, page={}", 
                             progress.series_id, progress.page));
@@ -920,6 +938,7 @@ impl Kavita {
         let mut fail_count = 0;
         
         for progress in &all_progress {
+            let page_num = kavita_progress_page_num(progress.page);
             let url = format!("http://{}/api/reader/progress", ip);
             let client = reqwest::Client::new();
             let response = client.post(&url)
@@ -929,7 +948,7 @@ impl Kavita {
                     "seriesId": progress.series_id,
                     "volumeId": progress.volume_id,
                     "chapterId": progress.chapter_id,
-                    "pageNum": progress.page
+                    "pageNum": page_num
                 }))
                 .send()
                 .await;
@@ -938,10 +957,12 @@ impl Kavita {
                 Ok(resp) => {
                     let status = resp.status();
                     let body = resp.text().await.unwrap_or_else(|_| "<failed to read body>".to_string());
-                    info(&format!(
-                        "api/reader/progress response (upload_progress_background): series_id={} page={} status={} body={}",
-                        progress.series_id, progress.page, status, body
-                    ));
+                    if status.as_u16() != 200 {
+                        info(&format!(
+                            "api/reader/progress response (upload_progress_background): series_id={} page_idx={} pageNum={} status={} body={}",
+                            progress.series_id, progress.page, page_num, status, body
+                        ));
+                    }
                     if status.is_success() {
                         success_count += 1;
                         if success_count % 10 == 0 {
@@ -1031,7 +1052,7 @@ impl Kavita {
     // Check if all pages in a volume are cached
     pub fn is_volume_cached(&self, volume_id: i32) -> bool {
         if let Some((chapter_id, pages)) = self.db.get_volume_chapter_and_pages(volume_id) {
-            for page in 1..=pages {
+            for page in 0..pages {
                 if !self.db.is_picture_cached(chapter_id, page) {
                     return false;
                 }
@@ -1140,7 +1161,7 @@ fn cache_serie_threaded(
                 }
                 info(&format!("Start caching volume {} (title: {}) in series {}", volume.id, volume.title, series_id));
                 if let Some((chapter_id, pages)) = db.get_volume_chapter_and_pages(volume.id) {
-                    for page in 1..=pages {
+                    for page in 0..pages {
                         if !db.is_picture_cached(chapter_id, page) {
                             let url = format!("http://{}/api/reader/image?chapterId={}&apiKey={}&page={}", ip, chapter_id, api_key, page);
                             let resp = ureq::get(&url).call();

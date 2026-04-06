@@ -9,8 +9,12 @@ interface ViewerParams {
 const Viewer: React.FC = () => {
   const { series_id, volume_id, chapter_id, pages, read } = useParams<ViewerParams>();
   const navigate = useNavigate();
-  const [currentPage, setCurrentPage] = useState(+read!);
-  const [loadedPages, setLoadedPages] = useState<number[]>([+read!]);
+  const pagesNum = Number(pages ?? 0);
+  const readNum = Number(read ?? 0);
+  /** Kavita `pagesRead` is 1..N while reading; reader images use 0..N-1. */
+  const startPage = pagesNum > 0 ? Math.min(readNum, pagesNum - 1) : 0;
+  const [currentPage, setCurrentPage] = useState(startPage);
+  const [loadedPages, setLoadedPages] = useState<number[]>([startPage]);
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState<number>(0);
   const [upKeyCount, setUpKeyCount] = useState<number>(0);
@@ -19,8 +23,17 @@ const Viewer: React.FC = () => {
   const upKeyTimeoutRef = useRef<number | null>(null);
   const scrollObserverRef = useRef<IntersectionObserver | null>(null);
   const progressSentRef = useRef(false);
-  const currentPageRef = useRef(+read!);
+  const currentPageRef = useRef(startPage);
   const upKeyCountRef = useRef(0);
+
+  useEffect(() => {
+    setCurrentPage(startPage);
+    setLoadedPages([startPage]);
+    currentPageRef.current = startPage;
+    progressSentRef.current = false;
+    setUpKeyCount(0);
+    upKeyCountRef.current = 0;
+  }, [series_id, volume_id, chapter_id, pages, read]);
 
   const getPageImage = (page: number) => {
     return "http://localhost:11337/api/picture/" + series_id + "/" + volume_id + "/" + chapter_id + "/" + page;
