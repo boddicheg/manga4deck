@@ -6,6 +6,9 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
   build-manga4deck:
     name: Build Manga4Deck
@@ -84,3 +87,24 @@ jobs:
         with:
           name: Manga4Deck-AppImage
           path: artifacts/*.AppImage
+
+      - name: Publish GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          TAG="v${APP_VERSION}"
+          TITLE="Manga4Deck v${APP_VERSION}"
+
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" artifacts/*.AppImage --clobber
+            gh release edit "$TAG" --title "$TITLE"
+          else
+            gh release create "$TAG" artifacts/*.AppImage --title "$TITLE" --notes "$TITLE"
+          fi
