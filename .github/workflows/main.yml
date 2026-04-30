@@ -53,6 +53,30 @@ jobs:
           cp src/target/release/manga4deck AppDir/usr/bin/manga4deck
           cp src/icons/128x128.png AppDir/usr/share/icons/hicolor/128x128/apps/manga4deck.png
 
+          WEBKIT_PROCESS="$(find /usr/lib /usr/libexec -type f -name WebKitNetworkProcess -print -quit 2>/dev/null || true)"
+          if [ -z "$WEBKIT_PROCESS" ]; then
+            echo "WebKitNetworkProcess was not found on the runner"
+            exit 1
+          fi
+          WEBKIT_DIR="$(dirname "$WEBKIT_PROCESS")"
+
+          mkdir -p AppDir/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1
+          cp -a "$WEBKIT_DIR"/. AppDir/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/
+
+          cat > AppRun <<'EOF'
+          #!/usr/bin/env bash
+          set -e
+
+          HERE="$(dirname "$(readlink -f "$0")")"
+
+          export LD_LIBRARY_PATH="$HERE/usr/lib:$HERE/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+          export WEBKIT_EXEC_PATH="$HERE/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1"
+          export WEBKIT_INJECTED_BUNDLE_PATH="$HERE/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1"
+
+          exec "$HERE/usr/bin/manga4deck" "$@"
+          EOF
+          chmod +x AppRun
+
           cat > AppDir/usr/share/applications/manga4deck.desktop <<'EOF'
           [Desktop Entry]
           Type=Application
@@ -76,6 +100,7 @@ jobs:
             --executable AppDir/usr/bin/manga4deck \
             --desktop-file AppDir/usr/share/applications/manga4deck.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/128x128/apps/manga4deck.png \
+            --custom-apprun AppRun \
             --output appimage
 
           mkdir -p artifacts
