@@ -668,7 +668,7 @@ async fn start_backend() {
 
 #[cfg(feature = "tauri-ui")]
 fn start_server() {
-    info("🚀 Manga4Deck v0.5.16 - Starting up...");
+    info("🚀 Manga4Deck v0.6.0 - Starting up...");
     #[cfg(feature = "tauri-ui")]
     info(&format!("📦 Tauri version: {}", tauri::VERSION));
 
@@ -733,7 +733,7 @@ fn run_frontend() {
 
 #[cfg(feature = "dioxus-ui")]
 fn run_frontend() {
-    info("🚀 Manga4Deck v0.5.16 - Starting Manga4Deck native UI...");
+    info("🚀 Manga4Deck v0.6.0 - Starting Manga4Deck native UI...");
 
     let runtime = tokio::runtime::Runtime::new().expect("failed to create native UI tokio runtime");
     let _runtime_guard = runtime.enter();
