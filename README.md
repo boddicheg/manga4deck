@@ -1,149 +1,100 @@
 # Manga4Deck
 
-A manga reader for Kavita on Steam Deck.
+Manga4Deck is a manga and manhwa reader for Steam Deck, built for a self-hosted Kavita server.
 
-## Development Setup
+The app has a Rust backend and a native Manga4Deck UI focused on Steam Deck use.
 
-### Prerequisites
+## Screenshots
 
-- Node.js (v16 or higher)
-- Python 3.8 or higher
-- pip (Python package manager)
-- Rust and Cargo
+![Dashboard](images/1.png)
 
-### Installation
+![Series shelf](images/2.png)
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/manga4deck.git
-   cd manga4deck
-   ```
+![Reader](images/3.png)
 
-2. Install Node.js dependencies:
-   ```bash
-   npm install
-   ```
+## Features
 
-3. Install Python dependencies:
-   ```bash
-   cd src-tauri/backend
-   pip install -r req.txt
-   cd ../..
-   ```
+- Steam Deck friendly shelf UI
+- Kavita library, series, volume, and page browsing
+- Offline/cache-aware volume and series state
+- Cover thumbnails cached as small JPEGs for faster shelf loading
+- Reader with batch page loading
+- Keyboard and Steam Deck controller friendly navigation
+
+## Controls
+
+Recommended Steam Deck keyboard mappings:
+
+| Action | Key |
+| --- | --- |
+| Activate selected tile | Enter |
+| Go back | Backspace |
+| Move selection on shelves | Arrow keys |
+| Scroll reader | Up / Down |
+| Show and move reader page slider | Left / Right |
+
+Reader behavior:
+
+- Up and Down scroll the page.
+- First Left or Right press shows the page slider.
+- While the slider is visible, Left and Right change the selected page.
+- The slider hides 5 seconds after the last Left or Right press.
 
 ## Development
 
-### Starting the Development Environment
+### Requirements
 
-To start the development environment with the Python backend running:
-
-```bash
-npm run dev-with-backend
-```
-
-This will:
-1. Build the Python backend if needed
-2. Start the Python backend server
-3. Start the Tauri development environment
-
-### Building the Python Backend Separately
-
-If you need to rebuild the Python backend:
+- Rust and Cargo
+- Node.js LTS and npm
+- Linux packages required by the native UI stack, for example on Ubuntu:
 
 ```bash
-npm run prepare-backend
+sudo apt-get update
+sudo apt-get install -y \
+  build-essential \
+  libayatana-appindicator3-dev \
+  librsvg2-dev \
+  libssl-dev \
+  libwebkit2gtk-4.1-dev \
+  libxdo-dev \
+  patchelf \
+  pkg-config
 ```
 
-### Building for Production
-
-To build the entire application for production:
+### Install dependencies
 
 ```bash
-npm run build-all
+npm ci
 ```
 
-This will:
-1. Build the Python backend
-2. Build the frontend
-3. Build the Tauri application
+### Run Manga4Deck
 
-## Troubleshooting
-
-### Python Backend Issues
-
-If you encounter issues with the Python backend:
-
-1. Check if there are any processes using port 11337:
-   ```bash
-   # On Linux/macOS
-   lsof -i :11337
-   
-   # On Windows
-   netstat -ano | findstr :11337
-   ```
-
-2. Kill any processes using port 11337:
-   ```bash
-   # On Linux/macOS
-   lsof -ti:11337 | xargs kill -9
-   
-   # On Windows
-   for /f "tokens=5" %a in ('netstat -aon ^| findstr :11337') do taskkill /F /PID %a
-   ```
-
-3. Rebuild the Python backend:
-   ```bash
-   npm run prepare-backend
-   ```
-
-### Tauri Development Issues
-
-If you encounter issues with the Tauri development environment:
-
-1. Kill any processes using port 1420:
-   ```bash
-   npm run kill
-   ```
-
-2. Restart the development environment:
-   ```bash
-   npm run dev-with-backend
-   ```
-
-manga4deck
-==========
-
-Reader for SteamDeck, developing only for reading manga using Kavita selfhosted server
-
-<a name="download" href="https://raw.githubusercontent.com/boddicheg/manga4deck/main/installer.desktop">Download .desktop</a>
-
-Screenshots:
-----
-![pic1](assets/manga4deck.jpg)
-![pic1](assets/manga4deck_2.jpg)
-
-Steam Deck mappings:
-----
-Buttons:
-- (A) - Keyboard -> Enter 
-- (B) - Keyboard -> Backspace 
-- (X) - Keyboard -> 'F2' - bind for caching manga serie, works only on manga volumes page 
-- (Y) - Keyboard -> 'F1' - set focused volume as completed
-
-Cross:
-- (<) - Keboard -> Left Arrow 
-- (>) - Keboard -> Rigth Arrow 
-- (^) - Keboard -> Up Arrow 
-- (v) - Keboard -> Down Arrow 
-
-
-Deps
-----
+```bash
+npm run manga4deck
 ```
-sudo apt-get install python3-pil python3-pil.imagetk
-sudo apt-get install python3-tk
+
+This starts the Rust backend HTTP API and launches the native Manga4Deck UI.
+
+### Build/check
+
+Check the Manga4Deck build:
+
+```bash
+cargo check --manifest-path src-tauri/Cargo.toml --no-default-features --features dioxus-ui
 ```
-mac
+
+Build the Manga4Deck binary:
+
+```bash
+cargo build --manifest-path src-tauri/Cargo.toml --no-default-features --features dioxus-ui
 ```
-brew install python-tk
+
+## Kavita
+
+Manga4Deck expects access to a Kavita server. Server IP, username/password, and API key are stored by the app settings UI.
+
+The local backend listens on:
+
+```text
+0.0.0.0:11337
 ```
