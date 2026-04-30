@@ -1,29 +1,25 @@
-use std::path::{Path, PathBuf};
-use std::fs;
-use serde::{Serialize, Deserialize};
-use serde_json::json;
+use crate::logger::info;
+use md5::{Digest, Md5};
 use reqwest;
-use md5::{Md5, Digest};
-use crate::logger::{
-    info
-};
 use reqwest::header;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use tokio::time::{timeout, Duration};
 
-use crate::storage::{
-    Database
-};
+use crate::storage::Database;
 
+use serde_json::json as serde_json_json;
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::thread;
-use std::collections::VecDeque;
 use tokio::sync::broadcast;
-use serde_json::json as serde_json_json;
 
 fn get_datadir() -> PathBuf {
     let home = dirs::home_dir().expect("Could not find home directory");
-    
+
     match std::env::consts::OS {
         "windows" => home.join("AppData/Roaming"),
         "linux" => home.join(".local/share"),
@@ -34,12 +30,12 @@ fn get_datadir() -> PathBuf {
 
 fn get_appdir_path(relative_path: &str) -> String {
     let mut datadir = get_datadir().join("manga4deck-cache");
-    
+
     // Create directory if it doesn't exist
     if !datadir.exists() {
         fs::create_dir_all(&datadir).expect("Failed to create directory");
     }
-    
+
     datadir = datadir.join(relative_path);
     datadir.to_string_lossy().into_owned()
 }
@@ -63,7 +59,11 @@ fn optimize_cover_to_jpeg_bytes(original: &[u8]) -> Option<Vec<u8>> {
 
     let img = image::load_from_memory(original).ok()?;
     // Resize similar to CSS background-size: cover (crop center, no distortion).
-    let thumb = img.resize_to_fill(COVER_THUMB_WIDTH, COVER_THUMB_HEIGHT, FilterType::CatmullRom);
+    let thumb = img.resize_to_fill(
+        COVER_THUMB_WIDTH,
+        COVER_THUMB_HEIGHT,
+        FilterType::CatmullRom,
+    );
     let rgb = thumb.to_rgb8();
     let (w, h) = rgb.dimensions();
 
@@ -71,6 +71,17 @@ fn optimize_cover_to_jpeg_bytes(original: &[u8]) -> Option<Vec<u8>> {
     let mut encoder = JpegEncoder::new_with_quality(&mut out, COVER_JPEG_QUALITY);
     encoder.encode(&rgb, w, h, ColorType::Rgb8.into()).ok()?;
     Some(out)
+}
+
+fn is_optimized_cover_file(path: &str) -> bool {
+    let is_jpeg = path.ends_with(".jpg") || path.ends_with(".jpeg");
+    if !is_jpeg {
+        return false;
+    }
+
+    image::image_dimensions(path)
+        .map(|(width, height)| width <= COVER_THUMB_WIDTH && height <= COVER_THUMB_HEIGHT)
+        .unwrap_or(false)
 }
 
 pub fn get_cache_size(delimiter: u64) -> u64 {
@@ -90,7 +101,7 @@ pub fn get_cache_size(delimiter: u64) -> u64 {
 }
 
 pub fn generate_hash_from_now() -> String {
-    let now = std::time::SystemTime::now() 
+    let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis();
@@ -123,7 +134,7 @@ pub struct Library {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Series {
-    pub id: i32,      
+    pub id: i32,
     pub library_id: i32,
     pub title: String,
     pub read: i32,
@@ -254,7 +265,7 @@ impl Kavita {
                 Some(serde_json_json!({
                     "mode": "offline",
                     "connected": false
-                }))
+                })),
             );
         } else {
             self.send_websocket_message(
@@ -264,7 +275,7 @@ impl Kavita {
                     "mode": "online",
                     "connected": true,
                     "username": logged_as
-                }))
+                })),
             );
         }
     }
@@ -272,23 +283,45 @@ impl Kavita {
     pub async fn reconnect_with_creds(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         info(&format!("reconnect_with_creds + "));
         // Get settings with proper error handling
-        self.ip = self.db.get_setting("ip")
+        self.ip = self
+            .db
+            .get_setting("ip")
             .expect("Failed to get IP setting")
             .unwrap_or_else(|| DEFAULT_IP.to_string());
-        let username = self.db.get_setting("username")
+        let username = self
+            .db
+            .get_setting("username")
             .expect("Failed to get username setting")
             .unwrap_or_else(|| DEFAULT_USERNAME.to_string());
-        let password = self.db.get_setting("password")
+        let password = self
+            .db
+            .get_setting("password")
             .expect("Failed to get password setting")
             .unwrap_or_else(|| DEFAULT_PASSWORD.to_string());
-        let api_key = self.db.get_setting("api_key")
+        let api_key = self
+            .db
+            .get_setting("api_key")
             .expect("Failed to get API key setting")
             .unwrap_or_else(|| DEFAULT_API_KEY.to_string());
-    
+
         info(&format!("IP: {}", self.ip));
         info(&format!("Username: {}", username));
-        info(&format!("Password: {}", if password.is_empty() { "<empty>" } else { "<set>" }));
-        info(&format!("API Key: {}", if api_key.is_empty() { "<empty>" } else { "<set>" }));
+        info(&format!(
+            "Password: {}",
+            if password.is_empty() {
+                "<empty>"
+            } else {
+                "<set>"
+            }
+        ));
+        info(&format!(
+            "API Key: {}",
+            if api_key.is_empty() {
+                "<empty>"
+            } else {
+                "<set>"
+            }
+        ));
 
         // self.ip = "192.168.1.100:5001".to_string();
 
@@ -296,7 +329,8 @@ impl Kavita {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
             .build()?;
-        let fut = client.post(format!("http://{}/api/Account/login", self.ip))
+        let fut = client
+            .post(format!("http://{}/api/Account/login", self.ip))
             .json(&json!({
                 "username": username,
                 "password": password,
@@ -304,8 +338,7 @@ impl Kavita {
             }))
             .send();
         match timeout(Duration::from_secs(5), fut).await {
-            Ok(Ok(resp)) => 
-            {
+            Ok(Ok(resp)) => {
                 let body = resp.text().await.unwrap();
                 let data: serde_json::Value = serde_json::from_str(&body)?;
                 self.token = data["token"].as_str().unwrap_or("").to_string();
@@ -319,7 +352,7 @@ impl Kavita {
                 }
                 // Send connection status notification
                 self.send_connection_status(false, &self.logged_as);
-            },
+            }
             Ok(Err(e)) => {
                 self.offline_mode = true;
                 self.logged_as = "".to_string();
@@ -342,7 +375,7 @@ impl Kavita {
             }
         };
         info(&format!("reconnect_with_creds - done"));
-        
+
         // Upload any offline progress now that we're online (in background thread)
         if !self.offline_mode {
             info("Spawning background task to upload offline progress...");
@@ -356,7 +389,7 @@ impl Kavita {
                 }
             });
         }
-        
+
         Ok(())
     }
 
@@ -376,7 +409,8 @@ impl Kavita {
         let url = format!("http://{}/api/library/scan-all", self.ip);
         if !self.offline_mode {
             let client = reqwest::Client::new();
-            let _ = client.post(url)
+            let _ = client
+                .post(url)
                 .header("Authorization", format!("Bearer {}", self.token))
                 .json(&json!({
                     "force": true
@@ -390,27 +424,34 @@ impl Kavita {
     // Library methods
     pub async fn pull_libraries(&self) -> Result<(), Box<dyn std::error::Error>> {
         let client = reqwest::Client::new();
-        let response = client.get(format!("http://{}/api/library/libraries", self.ip))
+        let response = client
+            .get(format!("http://{}/api/library/libraries", self.ip))
             .header("Authorization", format!("Bearer {}", self.token))
             .send()
-            .await?;    
+            .await?;
 
         if response.status().is_success() {
             let body = response.text().await?;
             // info(&format!("Libraries: {}", body));
             let data: serde_json::Value = serde_json::from_str(&body)?;
-            let libraries: Vec<Library> = data.as_array().unwrap().iter().map(|v| Library {
-                id: v["id"].as_i64().unwrap_or(0) as i32,
-                title: v["name"].as_str().unwrap_or("").to_string(),
-            }).collect();
+            let libraries: Vec<Library> = data
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| Library {
+                    id: v["id"].as_i64().unwrap_or(0) as i32,
+                    title: v["name"].as_str().unwrap_or("").to_string(),
+                })
+                .collect();
             for library in libraries {
                 self.db.add_library(&library)?;
             }
+        } else {
+            info(&format!(
+                "Failed to get libraries: response status {}",
+                response.status()
+            ));
         }
-        else {
-            info(&format!("Failed to get libraries: response status {}", response.status()));
-        }   
-
 
         Ok(())
     }
@@ -429,7 +470,8 @@ impl Kavita {
         // let mut result = Vec::new();
         if !self.offline_mode {
             let client = reqwest::Client::new();
-            let response = client.post(format!("http://{}/api/series/v2", self.ip))
+            let response = client
+                .post(format!("http://{}/api/series/v2", self.ip))
                 .header("Authorization", format!("Bearer {}", self.token))
                 .json(&json!({
                     "statements": [
@@ -446,23 +488,28 @@ impl Kavita {
                 .await?;
             let body = response.text().await?;
             let data: serde_json::Value = serde_json::from_str(&body)?;
-            let series: Vec<Series> = data.as_array().unwrap().iter().map(|v| Series {
-                // Avoid panics if Kavita returns 0 pages
-                // (some series can legitimately have 0 pages while metadata is still processing).
-                id: v["id"].as_i64().unwrap_or(0) as i32,
-                library_id: library_id.clone(),
-                title: v["name"].as_str().unwrap_or("").to_string(),
-                read: {
-                    let pages_read = v["pagesRead"].as_i64().unwrap_or(0) as i32;
-                    let pages = v["pages"].as_i64().unwrap_or(0) as i32;
-                    if pages <= 0 {
-                        0
-                    } else {
-                        (pages_read * 100) / pages
-                    }
-                },
-                pages: v["pages"].as_i64().unwrap_or(0) as i32,
-            }).collect();
+            let series: Vec<Series> = data
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| Series {
+                    // Avoid panics if Kavita returns 0 pages
+                    // (some series can legitimately have 0 pages while metadata is still processing).
+                    id: v["id"].as_i64().unwrap_or(0) as i32,
+                    library_id: library_id.clone(),
+                    title: v["name"].as_str().unwrap_or("").to_string(),
+                    read: {
+                        let pages_read = v["pagesRead"].as_i64().unwrap_or(0) as i32;
+                        let pages = v["pages"].as_i64().unwrap_or(0) as i32;
+                        if pages <= 0 {
+                            0
+                        } else {
+                            (pages_read * 100) / pages
+                        }
+                    },
+                    pages: v["pages"].as_i64().unwrap_or(0) as i32,
+                })
+                .collect();
             for series in series {
                 self.db.add_series(&series)?;
             }
@@ -471,25 +518,34 @@ impl Kavita {
         Ok(())
     }
 
-    pub async fn get_series(&self, library_id: &i32) -> Result<Vec<Series>, Box<dyn std::error::Error>> {
+    pub async fn get_series(
+        &self,
+        library_id: &i32,
+    ) -> Result<Vec<Series>, Box<dyn std::error::Error>> {
         if !self.offline_mode {
             self.pull_series(library_id).await?;
         }
         let mut series = self.db.get_series(library_id)?;
         // return only cached series
         if self.offline_mode {
-            series = series.into_iter().filter(|s| self.is_series_cached(s.id)).collect();
+            series = series
+                .into_iter()
+                .filter(|s| self.is_series_cached(s.id))
+                .collect();
         }
         // sort series by title and return sorted series
         series.sort_by_key(|s| s.title.clone());
         Ok(series)
     }
 
-    pub async fn get_series_cover(&self, series_id: &i32) -> Result<SeriesCover, Box<dyn std::error::Error>> {
-        // Prefer existing cached cover (and migrate old large PNGs to WebP).
+    pub async fn get_series_cover(
+        &self,
+        series_id: &i32,
+    ) -> Result<SeriesCover, Box<dyn std::error::Error>> {
+        // Prefer existing cached cover, but migrate old large files to JPEG thumbnails.
         if let Ok(existing) = self.db.get_series_cover(series_id) {
             if Path::new(&existing.file).exists() {
-                if existing.file.ends_with(".jpg") || existing.file.ends_with(".jpeg") {
+                if is_optimized_cover_file(&existing.file) {
                     return Ok(existing);
                 }
                 // Migrate/optimize old cached cover file to JPEG thumbnail.
@@ -522,11 +578,7 @@ impl Kavita {
             self.ip, series_id, self.api_key
         );
         let client = reqwest::Client::new();
-        let response = client
-            .get(url)
-            .header("Accept", "image/*")
-            .send()
-            .await?;
+        let response = client.get(url).header("Accept", "image/*").send().await?;
 
         let content_type = response
             .headers()
@@ -633,15 +685,21 @@ impl Kavita {
             ));
         }
         Ok(())
-    }   
+    }
 
-    pub async fn get_volumes(&self, series_id: &i32) -> Result<Vec<Volume>, Box<dyn std::error::Error>> {
+    pub async fn get_volumes(
+        &self,
+        series_id: &i32,
+    ) -> Result<Vec<Volume>, Box<dyn std::error::Error>> {
         let mut last_pull_err: Option<String> = None;
 
         if !self.offline_mode {
             if let Err(e) = self.pull_volumes(series_id).await {
                 last_pull_err = Some(e.to_string());
-                info(&format!("Failed to pull volumes for series {}: {}", series_id, e));
+                info(&format!(
+                    "Failed to pull volumes for series {}: {}",
+                    series_id, e
+                ));
             }
         }
 
@@ -652,7 +710,10 @@ impl Kavita {
             tokio::time::sleep(Duration::from_millis(300)).await;
             if let Err(e) = self.pull_volumes(series_id).await {
                 last_pull_err = Some(e.to_string());
-                info(&format!("Retry pull_volumes failed for series {}: {}", series_id, e));
+                info(&format!(
+                    "Retry pull_volumes failed for series {}: {}",
+                    series_id, e
+                ));
             } else {
                 last_pull_err = None;
             }
@@ -671,7 +732,13 @@ impl Kavita {
         // the series is "not loading". The UI already has `is_cached` to indicate if
         // a volume is available for offline reading.
         // sort volumes by title and converted to int and return sorted volumes
-        volumes.sort_by_key(|v| v.title.clone().replace(|c: char| !c.is_digit(10), "").parse::<i32>().unwrap_or(0));
+        volumes.sort_by_key(|v| {
+            v.title
+                .clone()
+                .replace(|c: char| !c.is_digit(10), "")
+                .parse::<i32>()
+                .unwrap_or(0)
+        });
         // Update is_cached for each volume
         for v in &mut volumes {
             v.is_cached = self.is_volume_cached(v.id);
@@ -685,11 +752,14 @@ impl Kavita {
         Ok(volumes)
     }
 
-    pub async fn get_volume_cover(&self, volume_id: &i32) -> Result<VolumeCover, Box<dyn std::error::Error>> {
-        // Prefer existing cached cover (and migrate old large PNGs to WebP).
+    pub async fn get_volume_cover(
+        &self,
+        volume_id: &i32,
+    ) -> Result<VolumeCover, Box<dyn std::error::Error>> {
+        // Prefer existing cached cover, but migrate old large files to JPEG thumbnails.
         if let Ok(existing) = self.db.get_volume_cover(volume_id) {
             if Path::new(&existing.file).exists() {
-                if existing.file.ends_with(".jpg") || existing.file.ends_with(".jpeg") {
+                if is_optimized_cover_file(&existing.file) {
                     return Ok(existing);
                 }
                 // Migrate/optimize old cached cover file to JPEG thumbnail.
@@ -722,11 +792,7 @@ impl Kavita {
             self.ip, volume_id, self.api_key
         );
         let client = reqwest::Client::new();
-        let response = client
-            .get(url)
-            .header("Accept", "image/*")
-            .send()
-            .await?;
+        let response = client.get(url).header("Accept", "image/*").send().await?;
 
         let content_type = response
             .headers()
@@ -759,19 +825,27 @@ impl Kavita {
 
         Ok(volume_cover)
     }
-    // -------------------------------------------------------------------------    
+    // -------------------------------------------------------------------------
     // Picture methods
-    pub async fn get_picture(&self, chapter_id: &i32, page: &i32) -> Result<String, Box<dyn std::error::Error>> {
+    pub async fn get_picture(
+        &self,
+        chapter_id: &i32,
+        page: &i32,
+    ) -> Result<String, Box<dyn std::error::Error>> {
         if !self.offline_mode {
-            let url = format!("http://{}/api/reader/image?chapterId={}&apiKey={}&page={}", self.ip, chapter_id, self.api_key, page);
+            let url = format!(
+                "http://{}/api/reader/image?chapterId={}&apiKey={}&page={}",
+                self.ip, chapter_id, self.api_key, page
+            );
             let client = reqwest::Client::new();
-            let response = client.get(url)
+            let response = client
+                .get(url)
                 .header("Content-Type", "image/png")
                 .send()
                 .await?;
             let body = response.bytes().await?;
             let hash = generate_hash_from_now();
-            let cache_folder = get_datadir().join("manga4deck-cache").join("cache");    
+            let cache_folder = get_datadir().join("manga4deck-cache").join("cache");
             let filename = cache_folder.join(format!("{}.png", hash));
             fs::write(&filename, body)?;
 
@@ -788,13 +862,17 @@ impl Kavita {
     }
     // -------------------------------------------------------------------------
     // Read Progress methods
-    pub async fn save_progress(&self, progress: &ReadProgress) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn save_progress(
+        &self,
+        progress: &ReadProgress,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let page_num = kavita_progress_page_num(progress.page);
         if !self.offline_mode {
             // Online mode: send to remote server
             let url = format!("http://{}/api/reader/progress", self.ip);
             let client = reqwest::Client::new();
-            let resp = client.post(url)
+            let resp = client
+                .post(url)
                 .header("Authorization", format!("Bearer {}", self.token))
                 .json(&json!({
                     "libraryId": progress.library_id,
@@ -806,7 +884,10 @@ impl Kavita {
                 .send()
                 .await?;
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_else(|_| "<failed to read body>".to_string());
+            let body = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "<failed to read body>".to_string());
             if status.as_u16() != 200 {
                 info(&format!(
                     "api/reader/progress response (save_progress): series_id={} volume_id={} chapter_id={} page_idx={} pageNum={} status={} body={}",
@@ -817,7 +898,7 @@ impl Kavita {
             // Offline mode: save to local database
             info(&format!("Saving progress offline: series_id={}, volume_id={}, chapter_id={}, page_idx={}, pagesRead={}", 
                 progress.series_id, progress.volume_id, progress.chapter_id, progress.page, page_num));
-            self.db.add_read_progress(progress)?;            
+            self.db.add_read_progress(progress)?;
             // Update volume read pages in offline mode
             if let Ok(Some(mut volume)) = self.db.get_volume_by_id(progress.volume_id) {
                 // Align with Kavita `pagesRead` (same as online `pageNum`)
@@ -827,7 +908,10 @@ impl Kavita {
                     page_num
                 };
                 self.db.add_volume(&volume)?;
-                info(&format!("Updated volume {} read pages to {}", volume.id, volume.read));
+                info(&format!(
+                    "Updated volume {} read pages to {}",
+                    volume.id, volume.read
+                ));
             }
         }
         Ok(())
@@ -842,12 +926,13 @@ impl Kavita {
         info("Uploading offline progress to server...");
         let all_progress = self.db.get_all_read_progress()?;
         let progress_count = all_progress.len();
-        
+
         for progress in &all_progress {
             let page_num = kavita_progress_page_num(progress.page);
             let url = format!("http://{}/api/reader/progress", self.ip);
             let client = reqwest::Client::new();
-            let response = client.post(&url)
+            let response = client
+                .post(&url)
                 .header("Authorization", format!("Bearer {}", self.token))
                 .json(&json!({
                     "libraryId": progress.library_id,
@@ -862,7 +947,10 @@ impl Kavita {
             match response {
                 Ok(resp) => {
                     let status = resp.status();
-                    let body = resp.text().await.unwrap_or_else(|_| "<failed to read body>".to_string());
+                    let body = resp
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "<failed to read body>".to_string());
                     if status.as_u16() != 200 {
                         info(&format!(
                             "api/reader/progress response (upload_progress): series_id={} page_idx={} pageNum={} status={} body={}",
@@ -870,23 +958,32 @@ impl Kavita {
                         ));
                     }
                     if status.is_success() {
-                        info(&format!("Successfully uploaded progress for series_id={}, page={}", 
-                            progress.series_id, progress.page));
+                        info(&format!(
+                            "Successfully uploaded progress for series_id={}, page={}",
+                            progress.series_id, progress.page
+                        ));
                     } else {
-                        info(&format!("Failed to upload progress for series_id={}, page={}: status {}", 
-                            progress.series_id, progress.page, status));
+                        info(&format!(
+                            "Failed to upload progress for series_id={}, page={}: status {}",
+                            progress.series_id, progress.page, status
+                        ));
                     }
                 }
                 Err(e) => {
-                    info(&format!("Error uploading progress for series_id={}, page={}: {}", 
-                        progress.series_id, progress.page, e));
+                    info(&format!(
+                        "Error uploading progress for series_id={}, page={}: {}",
+                        progress.series_id, progress.page, e
+                    ));
                 }
             }
         }
 
         // Clear local progress after successful upload
         if progress_count > 0 {
-            info(&format!("Clearing {} offline progress entries", progress_count));
+            info(&format!(
+                "Clearing {} offline progress entries",
+                progress_count
+            ));
             self.db.clear_read_progress()?;
         }
 
@@ -913,7 +1010,7 @@ impl Kavita {
         info("Uploading offline progress to server in background thread...");
         let all_progress = db.get_all_read_progress()?;
         let progress_count = all_progress.len();
-        
+
         if progress_count == 0 {
             info("No offline progress to upload");
             // Send end message even if no progress
@@ -932,16 +1029,20 @@ impl Kavita {
             return Ok(());
         }
 
-        info(&format!("Found {} progress entries to upload", progress_count));
-        
+        info(&format!(
+            "Found {} progress entries to upload",
+            progress_count
+        ));
+
         let mut success_count = 0;
         let mut fail_count = 0;
-        
+
         for progress in &all_progress {
             let page_num = kavita_progress_page_num(progress.page);
             let url = format!("http://{}/api/reader/progress", ip);
             let client = reqwest::Client::new();
-            let response = client.post(&url)
+            let response = client
+                .post(&url)
                 .header("Authorization", format!("Bearer {}", token))
                 .json(&json!({
                     "libraryId": progress.library_id,
@@ -956,7 +1057,10 @@ impl Kavita {
             match response {
                 Ok(resp) => {
                     let status = resp.status();
-                    let body = resp.text().await.unwrap_or_else(|_| "<failed to read body>".to_string());
+                    let body = resp
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "<failed to read body>".to_string());
                     if status.as_u16() != 200 {
                         info(&format!(
                             "api/reader/progress response (upload_progress_background): series_id={} page_idx={} pageNum={} status={} body={}",
@@ -966,23 +1070,33 @@ impl Kavita {
                     if status.is_success() {
                         success_count += 1;
                         if success_count % 10 == 0 {
-                            info(&format!("Uploaded {}/{} progress entries...", success_count, progress_count));
+                            info(&format!(
+                                "Uploaded {}/{} progress entries...",
+                                success_count, progress_count
+                            ));
                         }
                     } else {
                         fail_count += 1;
-                        info(&format!("Failed to upload progress for series_id={}, page={}: status {}", 
-                            progress.series_id, progress.page, status));
+                        info(&format!(
+                            "Failed to upload progress for series_id={}, page={}: status {}",
+                            progress.series_id, progress.page, status
+                        ));
                     }
                 }
                 Err(e) => {
                     fail_count += 1;
-                    info(&format!("Error uploading progress for series_id={}, page={}: {}", 
-                        progress.series_id, progress.page, e));
+                    info(&format!(
+                        "Error uploading progress for series_id={}, page={}: {}",
+                        progress.series_id, progress.page, e
+                    ));
                 }
             }
         }
 
-        info(&format!("Progress upload complete: {} succeeded, {} failed", success_count, fail_count));
+        info(&format!(
+            "Progress upload complete: {} succeeded, {} failed",
+            success_count, fail_count
+        ));
 
         // Send end message via WebSocket
         if let Some(sender) = &ws_sender {
@@ -1001,19 +1115,27 @@ impl Kavita {
         // Clear local progress after upload attempt (even if some failed)
         // This prevents re-uploading the same entries on next connection
         if success_count > 0 {
-            info(&format!("Clearing {} successfully uploaded progress entries", success_count));
+            info(&format!(
+                "Clearing {} successfully uploaded progress entries",
+                success_count
+            ));
             // Note: We clear all entries, not just successful ones, to avoid infinite retry loops
             // Failed entries will be lost, but new progress will continue to be saved
             db.clear_read_progress()?;
         }
 
         Ok(())
-    } 
+    }
 
-    pub async fn set_volume_as_read(&self, series_id: &i32, volume_id: &i32) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn set_volume_as_read(
+        &self,
+        series_id: &i32,
+        volume_id: &i32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let url = format!("http://{}/api/reader/mark-volume-read", self.ip);
         let client = reqwest::Client::new();
-        let _ = client.post(url)
+        let _ = client
+            .post(url)
             .header("Authorization", format!("Bearer {}", self.token))
             .json(&json!({
                 "seriesId": series_id,
@@ -1024,17 +1146,22 @@ impl Kavita {
         Ok(())
     }
 
-    pub async fn set_volume_as_unread(&self, series_id: &i32, volume_id: &i32) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn set_volume_as_unread(
+        &self,
+        series_id: &i32,
+        volume_id: &i32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let url = format!("http://{}/api/reader/mark-volume-unread", self.ip);
         let client = reqwest::Client::new();
-        let _ = client.post(url)
+        let _ = client
+            .post(url)
             .header("Authorization", format!("Bearer {}", self.token))
             .json(&json!({
                 "seriesId": series_id,
                 "volumeId": volume_id,
             }))
             .send()
-            .await?;    
+            .await?;
         Ok(())
     }
 
@@ -1094,7 +1221,7 @@ impl Kavita {
 
         // Get all picture files for this series
         let picture_files = self.db.get_series_picture_files(series_id)?;
-        
+
         // Delete files from disk
         for file_path in &picture_files {
             if let Err(e) = fs::remove_file(file_path) {
@@ -1111,22 +1238,26 @@ impl Kavita {
             queue.retain(|&id| id != series_id);
         }
 
-        info(&format!("Removed cache for series {} ({} files)", series_id, picture_files.len()));
+        info(&format!(
+            "Removed cache for series {} ({} files)",
+            series_id,
+            picture_files.len()
+        ));
         Ok(())
     }
 }
 
 // Background thread for caching series
 fn cache_serie_threaded(
-    db: Database, 
-    queue: Arc<StdMutex<VecDeque<i32>>>, 
-    ip: String, 
-    api_key: String, 
+    db: Database,
+    queue: Arc<StdMutex<VecDeque<i32>>>,
+    ip: String,
+    api_key: String,
     _token: String,
     ws_sender: Option<Arc<broadcast::Sender<serde_json::Value>>>,
 ) {
-    use ureq;
     use std::io::Read;
+    use ureq;
     loop {
         let series_id = {
             let mut q = queue.lock().unwrap();
@@ -1151,25 +1282,32 @@ fn cache_serie_threaded(
                 let digits: String = v.title.chars().filter(|c| c.is_digit(10)).collect();
                 digits.parse::<i32>().unwrap_or(0)
             });
-            
+
             let total_volumes = volumes.len();
             let mut cached_volumes = 0;
-            
+
             for volume in volumes {
                 if volume.pages > 0 && volume.read >= volume.pages {
                     continue; // Skip fully read volumes
                 }
-                info(&format!("Start caching volume {} (title: {}) in series {}", volume.id, volume.title, series_id));
+                info(&format!(
+                    "Start caching volume {} (title: {}) in series {}",
+                    volume.id, volume.title, series_id
+                ));
                 if let Some((chapter_id, pages)) = db.get_volume_chapter_and_pages(volume.id) {
                     for page in 0..pages {
                         if !db.is_picture_cached(chapter_id, page) {
-                            let url = format!("http://{}/api/reader/image?chapterId={}&apiKey={}&page={}", ip, chapter_id, api_key, page);
+                            let url = format!(
+                                "http://{}/api/reader/image?chapterId={}&apiKey={}&page={}",
+                                ip, chapter_id, api_key, page
+                            );
                             let resp = ureq::get(&url).call();
                             if let Ok(response) = resp {
                                 let mut bytes = Vec::new();
                                 response.into_reader().read_to_end(&mut bytes).unwrap();
                                 let hash = generate_hash_from_now();
-                                let cache_folder = get_datadir().join("manga4deck-cache").join("cache");    
+                                let cache_folder =
+                                    get_datadir().join("manga4deck-cache").join("cache");
                                 let filename = cache_folder.join(format!("{}.png", hash));
                                 fs::write(&filename, &bytes).unwrap();
                                 let picture = crate::kavita::MangaPicture {
@@ -1182,8 +1320,11 @@ fn cache_serie_threaded(
                         }
                     }
                 }
-                info(&format!("Finished caching volume {} (title: {}) in series {}", volume.id, volume.title, series_id));
-                
+                info(&format!(
+                    "Finished caching volume {} (title: {}) in series {}",
+                    volume.id, volume.title, series_id
+                ));
+
                 // Send volume cached notification
                 cached_volumes += 1;
                 if let Some(sender) = &ws_sender {
@@ -1203,7 +1344,7 @@ fn cache_serie_threaded(
                     let _ = sender.send(volume_msg);
                 }
             }
-            
+
             // Send caching end notification
             if let Some(sender) = &ws_sender {
                 let end_msg = serde_json_json!({

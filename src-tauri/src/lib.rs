@@ -1,3 +1,3 @@
 pub mod kavita;
-pub mod storage;
 pub mod logger;
+pub mod storage;

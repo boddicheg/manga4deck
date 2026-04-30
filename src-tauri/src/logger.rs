@@ -1,7 +1,7 @@
 use once_cell::sync::Lazy;
-use std::sync::Mutex;
 use serde::Serialize;
 use std::collections::VecDeque;
+use std::sync::Mutex;
 
 pub struct Logger {
     pub name: String,
@@ -25,7 +25,7 @@ impl Logger {
     pub fn info(&mut self, message: &str) {
         let formatted_message = format!("[{}] {}", self.name, message);
         println!("{}", formatted_message);
-        
+
         if self.buffer.len() >= 1000 {
             self.buffer.pop_front();
         }
