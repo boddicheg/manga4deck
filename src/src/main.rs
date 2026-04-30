@@ -666,14 +666,11 @@ fn main() {
     std::env::set_var("WEBKIT_DISABLE_ACCELERATED_VIDEO", "1");
     std::env::set_var("WEBKIT_DISABLE_COMPOSITING", "1");
 
-    // Force X11 and disable Wayland
-    if std::env::var("DISPLAY").is_err() {
-        std::env::set_var("DISPLAY", ":0");
+    // Steam Deck Gaming Mode usually runs under gamescope/Wayland. Do not
+    // overwrite DISPLAY or WAYLAND_DISPLAY; let GTK use the active session.
+    if std::env::var("GDK_BACKEND").is_err() {
+        std::env::set_var("GDK_BACKEND", "wayland,x11");
     }
-    std::env::set_var("WAYLAND_DISPLAY", "");
-    std::env::set_var("XDG_SESSION_TYPE", "x11");
-    std::env::set_var("GDK_BACKEND", "x11");
-    std::env::set_var("QT_QPA_PLATFORM", "xcb");
 
     run_frontend();
 }

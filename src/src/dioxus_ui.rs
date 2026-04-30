@@ -1677,7 +1677,8 @@ pub fn run_ui(kavita: SharedKavita) {
                 .with_window(
                     WindowBuilder::new()
                         .with_title("Manga4Deck")
-                        .with_inner_size(LogicalSize::new(1280.0, 720.0)),
+                        .with_inner_size(LogicalSize::new(1280.0, 720.0))
+                        .with_always_on_top(false),
                 )
                 .with_menu(None),
         )
