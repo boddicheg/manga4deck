@@ -10,16 +10,13 @@ use logger::{info, LogResponse, LOGGER};
 mod kavita;
 use kavita::{get_cache_size, ConnectionCreds, Kavita, Library, ReadProgress, Series, Volume};
 
-#[cfg(feature = "dioxus-ui")]
 mod dioxus_ui;
-mod fallback_html;
 mod storage;
 
 use axum::{
     body::Body,
     extract::{Extension, Path},
     http::StatusCode,
-    response::Html,
     response::Response,
     routing::{get, post},
     Json, Router,
@@ -34,12 +31,6 @@ use tower_http::cors::{Any, CorsLayer};
 
 // const APP_NAME: &str = "manga4deck";
 const KAVITA_IP: &str = "0.0.0.0:11337";
-
-#[cfg(feature = "tauri-ui")]
-#[tauri::command]
-fn exit_app() {
-    std::process::exit(0x0);
-}
 
 type SharedKavita = Arc<Mutex<Kavita>>;
 
@@ -567,12 +558,6 @@ async fn handle_websocket_connection(
     Ok(())
 }
 
-async fn serve_frontend() -> Result<Html<String>, StatusCode> {
-    // Always serve the fallback HTML form
-    info("Serving fallback HTML form");
-    Ok(Html(fallback_html::get_fallback_html().to_string()))
-}
-
 async fn initialize_kavita() -> SharedKavita {
     // Create WebSocket broadcaster
     let (ws_sender, _) = broadcast::channel::<serde_json::Value>(100);
@@ -609,7 +594,6 @@ async fn run_http_server(kavita: SharedKavita) {
         .allow_headers(Any);
 
     let app = Router::new()
-        .route("/", get(serve_frontend))
         .route("/api/logs", get(get_logs))
         .route("/api/status", get(get_status))
         .route("/api/toggle-offline-mode", post(toggle_offline_mode))
@@ -660,31 +644,6 @@ async fn run_http_server(kavita: SharedKavita) {
     }
 }
 
-#[cfg(feature = "tauri-ui")]
-async fn start_backend() {
-    let kavita = initialize_kavita().await;
-    run_http_server(kavita).await;
-}
-
-#[cfg(feature = "tauri-ui")]
-fn start_server() {
-    info("🚀 Manga4Deck v0.6.0 - Starting up...");
-    #[cfg(feature = "tauri-ui")]
-    info(&format!("📦 Tauri version: {}", tauri::VERSION));
-
-    tokio::runtime::Runtime::new()
-        .expect("failed to create backend tokio runtime")
-        .block_on(start_backend());
-}
-
-#[cfg(any(
-    all(feature = "tauri-ui", feature = "dioxus-ui"),
-))]
-compile_error!("Enable only one frontend feature: `tauri-ui` or `dioxus-ui`.");
-
-#[cfg(not(any(feature = "tauri-ui", feature = "dioxus-ui")))]
-compile_error!("Enable one frontend feature: `tauri-ui` or `dioxus-ui`.");
-
 fn main() {
     // Force software rendering to avoid EGL issues on Steam Deck
     std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
@@ -719,19 +678,6 @@ fn main() {
     run_frontend();
 }
 
-#[cfg(feature = "tauri-ui")]
-fn run_frontend() {
-    tauri::Builder::default()
-        .setup(|_| {
-            std::thread::spawn(start_server);
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![exit_app])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-}
-
-#[cfg(feature = "dioxus-ui")]
 fn run_frontend() {
     info("🚀 Manga4Deck v0.6.0 - Starting Manga4Deck native UI...");
 

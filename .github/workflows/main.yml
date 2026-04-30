@@ -6,47 +6,6 @@ on:
       - main
   pull_request:
 
-# Tauri build kept for later.
-# jobs:
-#   build-tauri:
-#     name: Build Tauri app
-#     runs-on: ubuntu-24.04
-#
-#     steps:
-#       - name: Checkout
-#         uses: actions/checkout@v4
-#
-#       - name: Setup Node
-#         uses: actions/setup-node@v4
-#         with:
-#           node-version: lts/*
-#           cache: npm
-#
-#       - name: Setup Rust
-#         uses: dtolnay/rust-toolchain@stable
-#
-#       - name: Install Linux dependencies
-#         run: |
-#           sudo apt-get update
-#           sudo apt-get install -y \
-#             build-essential \
-#             curl \
-#             file \
-#             libayatana-appindicator3-dev \
-#             librsvg2-dev \
-#             libssl-dev \
-#             libwebkit2gtk-4.1-dev \
-#             libxdo-dev \
-#             patchelf \
-#             pkg-config \
-#             wget
-#
-#       - name: Install frontend dependencies
-#         run: npm ci
-#
-#       - name: Build Tauri bundle
-#         uses: tauri-apps/tauri-action@v0
-
 jobs:
   build-manga4deck:
     name: Build Manga4Deck
@@ -76,20 +35,20 @@ jobs:
             wget
 
       - name: Build Manga4Deck binary
-        run: cargo build --manifest-path src-tauri/Cargo.toml --release --no-default-features --features dioxus-ui
+        run: cargo build --manifest-path src-native/Cargo.toml --release
 
       - name: Create AppDir
         run: |
           set -eux
-          VERSION="$(grep '^version =' src-tauri/Cargo.toml | head -n1 | cut -d '"' -f2)"
+          VERSION="$(grep '^version =' src-native/Cargo.toml | head -n1 | cut -d '"' -f2)"
           echo "APP_VERSION=${VERSION}" >> "$GITHUB_ENV"
 
           mkdir -p AppDir/usr/bin
           mkdir -p AppDir/usr/share/applications
           mkdir -p AppDir/usr/share/icons/hicolor/128x128/apps
 
-          cp src-tauri/target/release/manga4deck AppDir/usr/bin/manga4deck
-          cp src-tauri/icons/128x128.png AppDir/usr/share/icons/hicolor/128x128/apps/manga4deck.png
+          cp src-native/target/release/manga4deck AppDir/usr/bin/manga4deck
+          cp src-native/icons/128x128.png AppDir/usr/share/icons/hicolor/128x128/apps/manga4deck.png
 
           cat > AppDir/usr/share/applications/manga4deck.desktop <<'EOF'
           [Desktop Entry]

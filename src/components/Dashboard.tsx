@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import { fetchClearCache, fetchServerStatus, fetchUpdateLibrary, toggleOfflineMode } from "../services/Api";
 import { useNavigate } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/core";
 import { useToast } from "./ToastContainer";
 
 const Dashboard: React.FC = () => {
@@ -31,7 +30,7 @@ const Dashboard: React.FC = () => {
   // };
 
   async function exitApp() {
-    await invoke("exit_app", {});
+    window.close();
   }
 
   const updateLib = async () => {
