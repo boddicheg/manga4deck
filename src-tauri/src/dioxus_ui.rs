@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use dioxus::prelude::*;
 use once_cell::sync::OnceCell;
@@ -755,6 +756,33 @@ html, body, #main {
   font-weight: 700;
   text-align: center;
 }
+.reader-slider {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  width: min(820px, calc(100vw - 48px));
+  transform: translateX(-50%);
+  z-index: 20;
+  box-sizing: border-box;
+  padding: 12px 16px 14px;
+  border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 8px;
+  background: rgba(0,0,0,0.82);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.42);
+}
+.reader-slider-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+}
+.reader-slider input {
+  width: 100%;
+  accent-color: #3b82f6;
+}
 .reader-empty {
   margin-top: 120px;
   color: rgba(255,255,255,0.72);
@@ -778,6 +806,8 @@ fn app() -> Element {
     let mut reader_page = use_signal(|| 0i32);
     let mut reader_first_page = use_signal(|| 0i32);
     let mut reader_loaded_until = use_signal(|| 0i32);
+    let mut reader_slider_visible = use_signal(|| false);
+    let mut reader_slider_generation = use_signal(|| 0u64);
     let mut server_ip = use_signal(|| initial_status.server_ip);
     let mut username = use_signal(|| initial_status.logged_as);
     let mut password = use_signal(String::new);
@@ -800,6 +830,19 @@ fn app() -> Element {
                 }, 0);
                 "#,
             );
+        }
+    });
+
+    use_effect(move || {
+        let visible = reader_slider_visible();
+        let generation = reader_slider_generation();
+        if visible {
+            spawn(async move {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                if reader_slider_generation() == generation {
+                    reader_slider_visible.set(false);
+                }
+            });
         }
     });
 
@@ -854,28 +897,61 @@ fn app() -> Element {
                         event.prevent_default();
                         if page() == Page::Reader {
                             if let Some(volume) = reader_volume.read().as_ref() {
-                                let max_page = volume.pages.saturating_sub(1);
-                                let current = reader_page();
-                                let next = match key.as_str() {
-                                    "ArrowRight" | "ArrowDown" => (current + 1).min(max_page),
-                                    "ArrowLeft" | "ArrowUp" => current.saturating_sub(1),
-                                    _ => current,
-                                };
-                                reader_page.set(next);
-                                if next > reader_loaded_until() {
-                                    reader_loaded_until.set(reader_batch_end(next, volume.pages));
+                                match key.as_str() {
+                                    "ArrowDown" => {
+                                        document::eval(
+                                            r#"
+                                            const reader = document.querySelector(".reader-page");
+                                            if (reader) {
+                                                reader.scrollBy({ top: Math.floor(reader.clientHeight * 0.82), behavior: "smooth" });
+                                            }
+                                            "#,
+                                        );
+                                    }
+                                    "ArrowUp" => {
+                                        document::eval(
+                                            r#"
+                                            const reader = document.querySelector(".reader-page");
+                                            if (reader) {
+                                                reader.scrollBy({ top: -Math.floor(reader.clientHeight * 0.82), behavior: "smooth" });
+                                            }
+                                            "#,
+                                        );
+                                    }
+                                    "ArrowLeft" | "ArrowRight" => {
+                                        reader_slider_generation.set(reader_slider_generation().wrapping_add(1));
+                                        if !reader_slider_visible() {
+                                            reader_slider_visible.set(true);
+                                        } else {
+                                            let max_page = volume.pages.saturating_sub(1);
+                                            let current = reader_page();
+                                            let next = if key == "ArrowRight" {
+                                                (current + 1).min(max_page)
+                                            } else {
+                                                current.saturating_sub(1)
+                                            };
+                                            reader_page.set(next);
+                                            if next < reader_first_page() {
+                                                reader_first_page.set(next);
+                                            }
+                                            if next > reader_loaded_until() {
+                                                reader_loaded_until.set(reader_batch_end(next, volume.pages));
+                                            }
+                                            document::eval(&format!(
+                                                r#"
+                                                setTimeout(() => {{
+                                                    const page = document.querySelector('[data-reader-page="{}"]');
+                                                    if (page) {{
+                                                        page.scrollIntoView({{ block: "start", behavior: "smooth" }});
+                                                    }}
+                                                }}, 0);
+                                                "#,
+                                                next
+                                            ));
+                                        }
+                                    }
+                                    _ => {}
                                 }
-                                document::eval(&format!(
-                                    r#"
-                                    setTimeout(() => {{
-                                        const page = document.querySelector('[data-reader-page="{}"]');
-                                        if (page) {{
-                                            page.scrollIntoView({{ block: "start", behavior: "smooth" }});
-                                        }}
-                                    }}, 0);
-                                    "#,
-                                    next
-                                ));
                             }
                         } else {
                             let count = visible_tile_count(page(), &libraries.read(), &series.read(), &volumes.read());
@@ -975,6 +1051,7 @@ fn app() -> Element {
                                     reader_page.set(start_page);
                                     reader_first_page.set(start_page);
                                     reader_loaded_until.set(reader_batch_end(start_page, volume.pages));
+                                    reader_slider_visible.set(false);
                                     reader_volume.set(Some(volume.clone()));
                                     page.set(Page::Reader);
                                 }
@@ -1389,6 +1466,7 @@ fn app() -> Element {
                                                             reader_page.set(start_page);
                                                             reader_first_page.set(start_page);
                                                             reader_loaded_until.set(reader_batch_end(start_page, reader_item.pages));
+                                                            reader_slider_visible.set(false);
                                                             reader_volume.set(Some(reader_item.clone()));
                                                             page.set(Page::Reader);
                                                         },
@@ -1488,6 +1566,22 @@ fn app() -> Element {
                                                     div { class: "reader-empty", "This volume has no pages" }
                                                 }
                                             }
+                                            if reader_slider_visible() && volume.pages > 0 {
+                                                div { class: "reader-slider",
+                                                    div { class: "reader-slider-meta",
+                                                        span { "0" }
+                                                        span { "Page {display_page} / {total_pages}" }
+                                                        span { "{volume.pages.saturating_sub(1)}" }
+                                                    }
+                                                    input {
+                                                        r#type: "range",
+                                                        min: "0",
+                                                        max: "{volume.pages.saturating_sub(1)}",
+                                                        value: "{current}",
+                                                        readonly: true,
+                                                    }
+                                                }
+                                            }
                                         }
                                     } else {
                                         rsx! {
@@ -1570,7 +1664,6 @@ fn app() -> Element {
                     }
                 }
             }
-            div { class: "message", "{status_snapshot.message}" }
         }
     }
 }

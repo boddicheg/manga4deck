@@ -733,7 +733,7 @@ fn run_frontend() {
 
 #[cfg(feature = "dioxus-ui")]
 fn run_frontend() {
-    info("🚀 Manga4Deck v0.5.16 - Starting native Dioxus UI...");
+    info("🚀 Manga4Deck v0.5.16 - Starting Manga4Deck native UI...");
 
     let runtime = tokio::runtime::Runtime::new().expect("failed to create native UI tokio runtime");
     let _runtime_guard = runtime.enter();
