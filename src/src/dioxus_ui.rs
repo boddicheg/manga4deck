@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use dioxus::desktop::{tao::dpi::LogicalSize, Config, WindowBuilder};
 use dioxus::prelude::*;
 use once_cell::sync::OnceCell;
 use tokio::sync::Mutex;
@@ -1670,5 +1671,15 @@ fn app() -> Element {
 
 pub fn run_ui(kavita: SharedKavita) {
     let _ = KAVITA.set(kavita);
-    dioxus::launch(app);
+    dioxus::LaunchBuilder::desktop()
+        .with_cfg(
+            Config::new()
+                .with_window(
+                    WindowBuilder::new()
+                        .with_title("Manga4Deck")
+                        .with_inner_size(LogicalSize::new(1280.0, 720.0)),
+                )
+                .with_menu(None),
+        )
+        .launch(app);
 }
