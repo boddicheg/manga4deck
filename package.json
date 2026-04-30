@@ -8,7 +8,7 @@
     "kill": "kill-port 1420",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "manga4deck": "cargo run --manifest-path src-native/Cargo.toml"
+    "manga4deck": "cargo run --manifest-path src/Cargo.toml"
   },
   "dependencies": {
     "autoprefixer": "^10.4.21",

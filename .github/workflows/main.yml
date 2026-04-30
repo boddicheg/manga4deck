@@ -38,20 +38,20 @@ jobs:
             wget
 
       - name: Build Manga4Deck binary
-        run: cargo build --manifest-path src-native/Cargo.toml --release
+        run: cargo build --manifest-path src/Cargo.toml --release
 
       - name: Create AppDir
         run: |
           set -eux
-          VERSION="$(grep '^version =' src-native/Cargo.toml | head -n1 | cut -d '"' -f2)"
+          VERSION="$(grep '^version =' src/Cargo.toml | head -n1 | cut -d '"' -f2)"
           echo "APP_VERSION=${VERSION}" >> "$GITHUB_ENV"
 
           mkdir -p AppDir/usr/bin
           mkdir -p AppDir/usr/share/applications
           mkdir -p AppDir/usr/share/icons/hicolor/128x128/apps
 
-          cp src-native/target/release/manga4deck AppDir/usr/bin/manga4deck
-          cp src-native/icons/128x128.png AppDir/usr/share/icons/hicolor/128x128/apps/manga4deck.png
+          cp src/target/release/manga4deck AppDir/usr/bin/manga4deck
+          cp src/icons/128x128.png AppDir/usr/share/icons/hicolor/128x128/apps/manga4deck.png
 
           cat > AppDir/usr/share/applications/manga4deck.desktop <<'EOF'
           [Desktop Entry]

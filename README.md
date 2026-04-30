@@ -80,13 +80,13 @@ This starts the Rust backend HTTP API and launches the native Manga4Deck UI.
 Check the Manga4Deck build:
 
 ```bash
-cargo check --manifest-path src-native/Cargo.toml
+cargo check --manifest-path src/Cargo.toml
 ```
 
 Build the Manga4Deck binary:
 
 ```bash
-cargo build --manifest-path src-native/Cargo.toml
+cargo build --manifest-path src/Cargo.toml
 ```
 
 ## Kavita

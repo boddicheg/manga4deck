@@ -12,17 +12,8 @@ build/app/warn-app.txt
 build/app/xref-app.html
 build/app/localpycs/*
 dist/app.exe
-app/src-tauri/backend/build/*
-app/src-tauri/backend/lib/__pycache__/*
-app/src-tauri/backend/*.sqlite
 app/package-lock.json
-src-tauri/backend/dist/cache/*.png
-src-tauri/backend/dist/*.sqlite
 dist/*
 package-lock.json
 node_modules/*
-src-tauri/Cargo.lock
-src-tauri/backend/build/app.exe
 *.pyc
-src-tauri/backend/app.exe.spec
-src-tauri/target-check/*
