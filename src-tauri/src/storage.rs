@@ -3,14 +3,7 @@ use std::sync::{Arc, Mutex};
 
 // Removed unused import
 
-use crate::kavita::{
-    Library,
-    Series,
-    SeriesCover,
-    Volume,
-    VolumeCover,
-    MangaPicture,
-};
+use crate::kavita::{Library, MangaPicture, Series, SeriesCover, Volume, VolumeCover};
 
 #[derive(Clone)]
 pub struct Database {
@@ -60,8 +53,10 @@ impl Database {
             [],
         )?;
 
-        Ok(Database { conn: Arc::new(Mutex::new(conn)) })
-    }   
+        Ok(Database {
+            conn: Arc::new(Mutex::new(conn)),
+        })
+    }
 
     pub fn insert_setting(&self, key: &str, value: &str) -> Result<(), Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
@@ -140,11 +135,12 @@ impl Database {
     // Series methods
     pub fn get_series(&self, library_id: &i32) -> Result<Vec<Series>, Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, title, read, pages FROM series WHERE library_id = ?")?;
-        let series = stmt.query_map([library_id.to_string()], |row| { 
-            Ok(Series { 
+        let mut stmt =
+            conn.prepare("SELECT id, title, read, pages FROM series WHERE library_id = ?")?;
+        let series = stmt.query_map([library_id.to_string()], |row| {
+            Ok(Series {
                 id: row.get(0)?,
-                title: row.get(1)?, 
+                title: row.get(1)?,
                 read: row.get(2)?,
                 pages: row.get(3)?,
                 library_id: library_id.clone(),
@@ -153,7 +149,10 @@ impl Database {
         Ok(series.collect::<Result<Vec<Series>, rusqlite::Error>>()?)
     }
 
-    pub fn get_series_library_id(&self, series_id: i32) -> Result<Option<i32>, Box<dyn std::error::Error>> {
+    pub fn get_series_library_id(
+        &self,
+        series_id: i32,
+    ) -> Result<Option<i32>, Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT library_id FROM series WHERE id = ?")?;
         match stmt.query_row([series_id.to_string()], |row| row.get(0)) {
@@ -172,51 +171,80 @@ impl Database {
         if key_str == 0 {
             conn.execute(
                 "INSERT INTO series (id, library_id, title, read, pages) VALUES (?, ?, ?, ?, ?)",
-                [series.id.to_string(), series.library_id.to_string(), series.title.to_string(), series.read.to_string(), series.pages.to_string()],
+                [
+                    series.id.to_string(),
+                    series.library_id.to_string(),
+                    series.title.to_string(),
+                    series.read.to_string(),
+                    series.pages.to_string(),
+                ],
             )?;
         } else {
             // Update existing series with new progress and title
             conn.execute(
                 "UPDATE series SET title = ?, read = ?, pages = ? WHERE id = ?",
-                [series.title.to_string(), series.read.to_string(), series.pages.to_string(), series.id.to_string()],
+                [
+                    series.title.to_string(),
+                    series.read.to_string(),
+                    series.pages.to_string(),
+                    series.id.to_string(),
+                ],
             )?;
         }
         Ok(())
     }
 
-    pub fn add_series_cover(&self, series_cover: &SeriesCover) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn add_series_cover(
+        &self,
+        series_cover: &SeriesCover,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
         // check if series cover already exists
         let mut stmt = conn.prepare("SELECT count(*) FROM series_cover WHERE series_id = ?")?;
-        let key_str: i32 = stmt.query_row([series_cover.series_id.to_string()], |row| row.get(0))?;
+        let key_str: i32 =
+            stmt.query_row([series_cover.series_id.to_string()], |row| row.get(0))?;
         if key_str == 0 {
             conn.execute(
                 "INSERT INTO series_cover (series_id, file) VALUES (?, ?)",
-                [series_cover.series_id.to_string(), series_cover.file.to_string()],
+                [
+                    series_cover.series_id.to_string(),
+                    series_cover.file.to_string(),
+                ],
             )?;
         } else {
             conn.execute(
                 "UPDATE series_cover SET file = ? WHERE series_id = ?",
-                [series_cover.file.to_string(), series_cover.series_id.to_string()],
+                [
+                    series_cover.file.to_string(),
+                    series_cover.series_id.to_string(),
+                ],
             )?;
         }
         Ok(())
     }
 
-    pub fn get_series_cover(&self, series_id: &i32) -> Result<SeriesCover, Box<dyn std::error::Error>> {
+    pub fn get_series_cover(
+        &self,
+        series_id: &i32,
+    ) -> Result<SeriesCover, Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT file FROM series_cover WHERE series_id = ?")?;
         let series_cover = stmt.query_row([series_id.to_string()], |row| row.get(0))?;
-        Ok(SeriesCover { series_id: series_id.clone(), file: series_cover })
+        Ok(SeriesCover {
+            series_id: series_id.clone(),
+            file: series_cover,
+        })
     }
     // -------------------------------------------------------------------------
     // Volume methods
     pub fn get_volumes(&self, series_id: &i32) -> Result<Vec<Volume>, Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, title, read, pages, chapter_id, volume_id FROM volumes WHERE series_id = ?")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, read, pages, chapter_id, volume_id FROM volumes WHERE series_id = ?",
+        )?;
         let volumes = stmt.query_map([series_id.to_string()], |row| {
-            Ok(Volume { 
-                id: row.get(0)?,    
+            Ok(Volume {
+                id: row.get(0)?,
                 title: row.get(1)?,
                 read: row.get(2)?,
                 pages: row.get(3)?,
@@ -227,9 +255,12 @@ impl Database {
             })
         })?;
         Ok(volumes.collect::<Result<Vec<Volume>, rusqlite::Error>>()?)
-    }   
+    }
 
-    pub fn get_volume_by_id(&self, volume_id: i32) -> Result<Option<Volume>, Box<dyn std::error::Error>> {
+    pub fn get_volume_by_id(
+        &self,
+        volume_id: i32,
+    ) -> Result<Option<Volume>, Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT id, series_id, chapter_id, volume_id, title, read, pages FROM volumes WHERE id = ?")?;
         let mut rows = stmt.query_map([volume_id.to_string()], |row| {
@@ -244,7 +275,7 @@ impl Database {
                 is_cached: false,
             })
         })?;
-        
+
         if let Some(row) = rows.next() {
             Ok(Some(row?))
         } else {
@@ -262,68 +293,104 @@ impl Database {
                 "INSERT INTO volumes (id, series_id, chapter_id, volume_id, title, read, pages) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [volume.id.to_string(), volume.series_id.to_string(), volume.chapter_id.to_string(), volume.volume_id.to_string(), volume.title.to_string(), volume.read.to_string(), volume.pages.to_string()],
             )?;
-        }
-        else {
+        } else {
             conn.execute(
                 "UPDATE volumes SET title = ?, read = ?, pages = ? WHERE id = ?",
-                [volume.title.to_string(), volume.read.to_string(), volume.pages.to_string(), volume.id.to_string()],
+                [
+                    volume.title.to_string(),
+                    volume.read.to_string(),
+                    volume.pages.to_string(),
+                    volume.id.to_string(),
+                ],
             )?;
         }
         Ok(())
     }
 
-    pub fn add_volume_cover(&self, volume_cover: &VolumeCover) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn add_volume_cover(
+        &self,
+        volume_cover: &VolumeCover,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
         // check if volume cover already exists
         let mut stmt = conn.prepare("SELECT count(*) FROM volumes_cover WHERE volume_id = ?")?;
-        let key_str: i32 = stmt.query_row([volume_cover.volume_id.to_string()], |row| row.get(0))?;
+        let key_str: i32 =
+            stmt.query_row([volume_cover.volume_id.to_string()], |row| row.get(0))?;
         if key_str == 0 {
             conn.execute(
                 "INSERT INTO volumes_cover (volume_id, file) VALUES (?, ?)",
-                [volume_cover.volume_id.to_string(), volume_cover.file.to_string()],
+                [
+                    volume_cover.volume_id.to_string(),
+                    volume_cover.file.to_string(),
+                ],
             )?;
         } else {
             conn.execute(
                 "UPDATE volumes_cover SET file = ? WHERE volume_id = ?",
-                [volume_cover.file.to_string(), volume_cover.volume_id.to_string()],
+                [
+                    volume_cover.file.to_string(),
+                    volume_cover.volume_id.to_string(),
+                ],
             )?;
         }
         Ok(())
     }
 
-    pub fn get_volume_cover(&self, volume_id: &i32) -> Result<VolumeCover, Box<dyn std::error::Error>> {
+    pub fn get_volume_cover(
+        &self,
+        volume_id: &i32,
+    ) -> Result<VolumeCover, Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT file FROM volumes_cover WHERE volume_id = ?")?;
         let volume_cover = stmt.query_row([volume_id.to_string()], |row| row.get(0))?;
-        Ok(VolumeCover { volume_id: volume_id.clone(), file: volume_cover })
+        Ok(VolumeCover {
+            volume_id: volume_id.clone(),
+            file: volume_cover,
+        })
     }
 
     // -------------------------------------------------------------------------
     // Picture methods
     pub fn add_picture(&self, picture: &MangaPicture) -> Result<(), Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT count(*) FROM manga_pictures WHERE chapter_id = ? AND page = ?")?;
-        let key_str: i32 = stmt.query_row([picture.chapter_id.to_string(), picture.page.to_string()], |row| row.get(0))?; 
+        let mut stmt =
+            conn.prepare("SELECT count(*) FROM manga_pictures WHERE chapter_id = ? AND page = ?")?;
+        let key_str: i32 = stmt.query_row(
+            [picture.chapter_id.to_string(), picture.page.to_string()],
+            |row| row.get(0),
+        )?;
         if key_str == 0 {
             conn.execute(
                 "INSERT INTO manga_pictures (chapter_id, page, file) VALUES (?, ?, ?)",
-                [picture.chapter_id.to_string(), picture.page.to_string(), picture.file.to_string()],
+                [
+                    picture.chapter_id.to_string(),
+                    picture.page.to_string(),
+                    picture.file.to_string(),
+                ],
             )?;
         }
         Ok(())
     }
 
-    pub fn get_picture(&self, chapter_id: &i32, page: &i32) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn get_picture(
+        &self,
+        chapter_id: &i32,
+        page: &i32,
+    ) -> Result<String, Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT file FROM manga_pictures WHERE chapter_id = ? AND page = ?")?;
-        let picture = stmt.query_row([chapter_id.to_string(), page.to_string()], |row| row.get(0))?;
+        let mut stmt =
+            conn.prepare("SELECT file FROM manga_pictures WHERE chapter_id = ? AND page = ?")?;
+        let picture =
+            stmt.query_row([chapter_id.to_string(), page.to_string()], |row| row.get(0))?;
         Ok(picture)
     }
 
     // Helper: get chapter_id and pages for a volume
     pub fn get_volume_chapter_and_pages(&self, volume_id: i32) -> Option<(i32, i32)> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT chapter_id, pages FROM volumes WHERE id = ?").ok()?;
+        let mut stmt = conn
+            .prepare("SELECT chapter_id, pages FROM volumes WHERE id = ?")
+            .ok()?;
         let mut rows = stmt.query([volume_id.to_string()]).ok()?;
         if let Some(row) = rows.next().ok()? {
             let chapter_id: i32 = row.get(0).ok()?;
@@ -337,10 +404,13 @@ impl Database {
     // Helper: check if a picture is cached
     pub fn is_picture_cached(&self, chapter_id: i32, page: i32) -> bool {
         let conn = self.conn.lock().unwrap();
-        let stmt = conn.prepare("SELECT count(*) FROM manga_pictures WHERE chapter_id = ? AND page = ?");
+        let stmt =
+            conn.prepare("SELECT count(*) FROM manga_pictures WHERE chapter_id = ? AND page = ?");
         match stmt {
             Ok(mut stmt) => {
-                let count = stmt.query_row([chapter_id.to_string(), page.to_string()], |r| r.get::<_, i32>(0));
+                let count = stmt.query_row([chapter_id.to_string(), page.to_string()], |r| {
+                    r.get::<_, i32>(0)
+                });
                 matches!(count, Ok(c) if c > 0)
             }
             Err(_) => false,
@@ -348,16 +418,17 @@ impl Database {
     }
 
     // Get all picture files for a series (through volumes)
-    pub fn get_series_picture_files(&self, series_id: i32) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    pub fn get_series_picture_files(
+        &self,
+        series_id: i32,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
         // Get all chapter_ids for volumes in this series
         let mut stmt = conn.prepare(
             "SELECT DISTINCT mp.file FROM manga_pictures mp INNER JOIN volumes v ON mp.chapter_id = v.chapter_id WHERE v.series_id = ?"
         )?;
-        let rows = stmt.query_map([series_id.to_string()], |row| {
-            Ok(row.get::<_, String>(0)?)
-        })?;
-        
+        let rows = stmt.query_map([series_id.to_string()], |row| Ok(row.get::<_, String>(0)?))?;
+
         let mut files = Vec::new();
         for row in rows {
             files.push(row?);
@@ -392,7 +463,10 @@ impl Database {
     }
 
     // Read Progress methods
-    pub fn add_read_progress(&self, progress: &crate::kavita::ReadProgress) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn add_read_progress(
+        &self,
+        progress: &crate::kavita::ReadProgress,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO read_progress (library_id, series_id, volume_id, chapter_id, page) VALUES (?, ?, ?, ?, ?)",
@@ -407,7 +481,10 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_read_progress(&self, series_id: i32) -> Result<Vec<crate::kavita::ReadProgress>, Box<dyn std::error::Error>> {
+    pub fn get_read_progress(
+        &self,
+        series_id: i32,
+    ) -> Result<Vec<crate::kavita::ReadProgress>, Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT id, library_id, series_id, volume_id, chapter_id, page FROM read_progress WHERE series_id = ?")?;
         let rows = stmt.query_map([series_id.to_string()], |row| {
@@ -420,7 +497,7 @@ impl Database {
                 page: row.get(5)?,
             })
         })?;
-        
+
         let mut progress = Vec::new();
         for row in rows {
             progress.push(row?);
@@ -428,9 +505,13 @@ impl Database {
         Ok(progress)
     }
 
-    pub fn get_all_read_progress(&self) -> Result<Vec<crate::kavita::ReadProgress>, Box<dyn std::error::Error>> {
+    pub fn get_all_read_progress(
+        &self,
+    ) -> Result<Vec<crate::kavita::ReadProgress>, Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, library_id, series_id, volume_id, chapter_id, page FROM read_progress")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, library_id, series_id, volume_id, chapter_id, page FROM read_progress",
+        )?;
         let rows = stmt.query_map([], |row| {
             Ok(crate::kavita::ReadProgress {
                 id: Some(row.get(0)?),
@@ -441,7 +522,7 @@ impl Database {
                 page: row.get(5)?,
             })
         })?;
-        
+
         let mut progress = Vec::new();
         for row in rows {
             progress.push(row?);
@@ -454,6 +535,4 @@ impl Database {
         conn.execute("DELETE FROM read_progress", [])?;
         Ok(())
     }
-
 }
-

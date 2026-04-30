@@ -5,51 +5,40 @@ use std::fs::File;
 use std::io::Read;
 
 mod logger;
-use logger::{   
-    info, 
-    LOGGER,
-    LogResponse
-};
+use logger::{info, LogResponse, LOGGER};
 
 mod kavita;
-use kavita::{
-    ConnectionCreds,
-    get_cache_size,
-    Kavita,
-    Library,
-    Series,
-    Volume,
-    ReadProgress,
-};
+use kavita::{get_cache_size, ConnectionCreds, Kavita, Library, ReadProgress, Series, Volume};
 
-
-mod storage;
+#[cfg(feature = "dioxus-ui")]
+mod dioxus_ui;
 mod fallback_html;
+mod storage;
 
 use axum::{
-    routing::{get, post},
-    Router,
-    http::StatusCode,
-    Json,
+    body::Body,
     extract::{Extension, Path},
+    http::StatusCode,
     response::Html,
     response::Response,
-    body::Body
+    routing::{get, post},
+    Json, Router,
 };
-use tower_http::cors::{Any, CorsLayer};
+use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use std::sync::Arc;
-use tokio::sync::{Mutex, broadcast};
-use futures_util::{SinkExt, StreamExt};
-use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{broadcast, Mutex};
+use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tower_http::cors::{Any, CorsLayer};
 
 // const APP_NAME: &str = "manga4deck";
 const KAVITA_IP: &str = "0.0.0.0:11337";
 
+#[cfg(feature = "tauri-ui")]
 #[tauri::command]
 fn exit_app() {
-  std::process::exit(0x0);
+    std::process::exit(0x0);
 }
 
 type SharedKavita = Arc<Mutex<Kavita>>;
@@ -59,7 +48,13 @@ type WebSocketSender = broadcast::Sender<serde_json::Value>;
 async fn get_logs() -> (StatusCode, Json<LogResponse>) {
     // info("[get_logs] Getting logs...");
     let logs = LOGGER.lock().unwrap().get();
-    (StatusCode::OK, Json(LogResponse { logs: logs.to_vec(), count: logs.len() }))
+    (
+        StatusCode::OK,
+        Json(LogResponse {
+            logs: logs.to_vec(),
+            count: logs.len(),
+        }),
+    )
 }
 
 #[derive(Serialize)]
@@ -71,7 +66,9 @@ struct StatusResponse {
     offline_mode: bool,
 }
 
-async fn get_status(Extension(kavita): Extension<SharedKavita>) -> (StatusCode, Json<StatusResponse>) {
+async fn get_status(
+    Extension(kavita): Extension<SharedKavita>,
+) -> (StatusCode, Json<StatusResponse>) {
     let kavita_guard = kavita.lock().await;
     let ip = kavita_guard
         .get_setting("ip")
@@ -82,19 +79,24 @@ async fn get_status(Extension(kavita): Extension<SharedKavita>) -> (StatusCode, 
     let cache = get_cache_size(1024 * 1024);
     let offline_mode = kavita_guard.offline_mode;
 
-    (StatusCode::OK, Json(StatusResponse {
-        status: !offline_mode,
-        ip,
-        logged_as,
-        cache,
-        offline_mode,
-    }))
+    (
+        StatusCode::OK,
+        Json(StatusResponse {
+            status: !offline_mode,
+            ip,
+            logged_as,
+            cache,
+            offline_mode,
+        }),
+    )
 }
 
-async fn toggle_offline_mode(Extension(kavita): Extension<SharedKavita>) -> (StatusCode, Json<serde_json::Value>) {
+async fn toggle_offline_mode(
+    Extension(kavita): Extension<SharedKavita>,
+) -> (StatusCode, Json<serde_json::Value>) {
     let mut kavita_guard = kavita.lock().await;
     kavita_guard.offline_mode = !kavita_guard.offline_mode;
-    
+
     // Send connection status notification
     if kavita_guard.offline_mode {
         kavita_guard.send_connection_status(true, "");
@@ -110,19 +112,33 @@ async fn toggle_offline_mode(Extension(kavita): Extension<SharedKavita>) -> (Sta
         }
     }
 
-    (StatusCode::OK, Json(serde_json::json!({
-        "offline_mode": kavita_guard.offline_mode,
-        "message": if kavita_guard.offline_mode { "Switched to offline mode" } else { "Switched to online mode" }
-    })))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "offline_mode": kavita_guard.offline_mode,
+            "message": if kavita_guard.offline_mode { "Switched to offline mode" } else { "Switched to online mode" }
+        })),
+    )
 }
 
-async fn update_server_settings(Extension(kavita): Extension<SharedKavita>, Json(creds): Json<ConnectionCreds>) -> (StatusCode, Json<ConnectionCreds>) {
+async fn update_server_settings(
+    Extension(kavita): Extension<SharedKavita>,
+    Json(creds): Json<ConnectionCreds>,
+) -> (StatusCode, Json<ConnectionCreds>) {
     info(&format!(
         "Updating server settings: ip='{}' username='{}' password={} api_key={}",
         creds.ip,
         creds.username,
-        if creds.password.is_empty() { "<empty>" } else { "<set>" },
-        if creds.api_key.is_empty() { "<empty>" } else { "<set>" }
+        if creds.password.is_empty() {
+            "<empty>"
+        } else {
+            "<set>"
+        },
+        if creds.api_key.is_empty() {
+            "<empty>"
+        } else {
+            "<set>"
+        }
     ));
     let mut kavita_guard = kavita.lock().await;
     let _ = kavita_guard.insert_setting("ip", &creds.ip);
@@ -133,14 +149,37 @@ async fn update_server_settings(Extension(kavita): Extension<SharedKavita>, Json
     (StatusCode::OK, Json(creds))
 }
 
-async fn get_server_settings(Extension(kavita): Extension<SharedKavita>) -> (StatusCode, Json<ConnectionCreds>) {
+async fn get_server_settings(
+    Extension(kavita): Extension<SharedKavita>,
+) -> (StatusCode, Json<ConnectionCreds>) {
     info("[get_server_settings] Getting server settings...");
     let kavita_guard = kavita.lock().await;
-    let ip = kavita_guard.get_setting("ip").ok().flatten().unwrap_or_else(|| "".to_string());
-    let username = kavita_guard.get_setting("username").ok().flatten().unwrap_or_else(|| "".to_string());
-    let password = kavita_guard.get_setting("password").ok().flatten().unwrap_or_else(|| "".to_string());
-    let api_key = kavita_guard.get_setting("api_key").ok().flatten().unwrap_or_else(|| "".to_string());
-    let creds = ConnectionCreds { ip, username, password, api_key };
+    let ip = kavita_guard
+        .get_setting("ip")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "".to_string());
+    let username = kavita_guard
+        .get_setting("username")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "".to_string());
+    let password = kavita_guard
+        .get_setting("password")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "".to_string());
+    let api_key = kavita_guard
+        .get_setting("api_key")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "".to_string());
+    let creds = ConnectionCreds {
+        ip,
+        username,
+        password,
+        api_key,
+    };
     (StatusCode::OK, Json(creds))
 }
 
@@ -156,7 +195,10 @@ fn content_type_from_path(path: &str) -> &'static str {
     }
 }
 
-fn read_file_response(path: &str, cache_control: Option<&'static str>) -> Result<Response, (StatusCode, Response)> {
+fn read_file_response(
+    path: &str,
+    cache_control: Option<&'static str>,
+) -> Result<Response, (StatusCode, Response)> {
     let content_type = content_type_from_path(path);
     match File::open(path) {
         Ok(mut file) => {
@@ -179,12 +221,17 @@ fn read_file_response(path: &str, cache_control: Option<&'static str>) -> Result
             })?;
             Ok(response)
         }
-        Err(_) => Err((StatusCode::NOT_FOUND, Response::new(Body::from("File not found")))),
+        Err(_) => Err((
+            StatusCode::NOT_FOUND,
+            Response::new(Body::from("File not found")),
+        )),
     }
 }
 
 // #[axum::debug_handler]
-async fn get_libraries(Extension(kavita): Extension<SharedKavita>) -> (StatusCode, Json<Vec<Library>>) {
+async fn get_libraries(
+    Extension(kavita): Extension<SharedKavita>,
+) -> (StatusCode, Json<Vec<Library>>) {
     let kavita_guard = kavita.lock().await;
     match kavita_guard.get_libraries().await {
         Ok(libraries) => (StatusCode::OK, Json(libraries)),
@@ -201,7 +248,9 @@ async fn clear_cache(Extension(kavita): Extension<SharedKavita>) -> (StatusCode,
     (StatusCode::OK, Json(()))
 }
 
-async fn update_server_library(Extension(kavita): Extension<SharedKavita>) -> (StatusCode, Json<()>) {
+async fn update_server_library(
+    Extension(kavita): Extension<SharedKavita>,
+) -> (StatusCode, Json<()>) {
     let kavita_guard = kavita.lock().await;
     let _ = kavita_guard.update_server_library().await;
     (StatusCode::OK, Json(()))
@@ -209,14 +258,17 @@ async fn update_server_library(Extension(kavita): Extension<SharedKavita>) -> (S
 
 async fn get_series(
     Extension(kavita): Extension<SharedKavita>,
-    Path(library_id): Path<i32>
+    Path(library_id): Path<i32>,
 ) -> (StatusCode, Json<Vec<Series>>) {
     // info(&format!("Getting series for library: {}", library_id));
     let kavita_guard = kavita.lock().await;
     match kavita_guard.get_series(&library_id).await {
         Ok(series) => (StatusCode::OK, Json(series)),
         Err(err) => {
-            info(&format!("Failed to get series for library {}: {}", library_id, err));
+            info(&format!(
+                "Failed to get series for library {}: {}",
+                library_id, err
+            ));
             (StatusCode::OK, Json(Vec::new()))
         }
     }
@@ -224,41 +276,53 @@ async fn get_series(
 
 async fn get_series_cover(
     Extension(kavita): Extension<SharedKavita>,
-    Path(series_id): Path<i32>
+    Path(series_id): Path<i32>,
 ) -> (StatusCode, Response) {
     // info(&format!("Getting series cover for series: {}", series_id));
     let kavita_guard = kavita.lock().await;
     match kavita_guard.get_series_cover(&series_id).await {
         Ok(series_cover) => {
-            match read_file_response(&series_cover.file, Some("public, max-age=31536000, immutable")) {
+            match read_file_response(
+                &series_cover.file,
+                Some("public, max-age=31536000, immutable"),
+            ) {
                 Ok(resp) => (StatusCode::OK, resp),
                 Err((status, resp)) => (status, resp),
             }
         }
-        Err(_) => (StatusCode::NOT_FOUND, Response::new(Body::from("Series cover not available"))),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Response::new(Body::from("Series cover not available")),
+        ),
     }
 }
 
 async fn get_volume_cover(
     Extension(kavita): Extension<SharedKavita>,
-    Path(volume_id): Path<i32>
+    Path(volume_id): Path<i32>,
 ) -> (StatusCode, Response) {
     // info(&format!("Getting volume cover for volume: {}", volume_id));
     let kavita_guard = kavita.lock().await;
     match kavita_guard.get_volume_cover(&volume_id).await {
         Ok(volume_cover) => {
-            match read_file_response(&volume_cover.file, Some("public, max-age=31536000, immutable")) {
+            match read_file_response(
+                &volume_cover.file,
+                Some("public, max-age=31536000, immutable"),
+            ) {
                 Ok(resp) => (StatusCode::OK, resp),
                 Err((status, resp)) => (status, resp),
             }
         }
-        Err(_) => (StatusCode::NOT_FOUND, Response::new(Body::from("Volume cover not available"))),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Response::new(Body::from("Volume cover not available")),
+        ),
     }
 }
 
 async fn get_volumes(
     Extension(kavita): Extension<SharedKavita>,
-    Path(series_id): Path<i32>
+    Path(series_id): Path<i32>,
 ) -> (StatusCode, Json<Vec<Volume>>) {
     // info(&format!("Getting volumes for series: {}", series_id));
     let kavita_guard = kavita.lock().await;
@@ -278,7 +342,10 @@ async fn get_volumes(
             (StatusCode::OK, Json(volumes))
         }
         Err(err) => {
-            info(&format!("Failed to get volumes for series {}: {}", series_id, err));
+            info(&format!(
+                "Failed to get volumes for series {}: {}",
+                series_id, err
+            ));
             (StatusCode::SERVICE_UNAVAILABLE, Json(Vec::new()))
         }
     }
@@ -286,29 +353,35 @@ async fn get_volumes(
 
 async fn get_picture(
     Extension(kavita): Extension<SharedKavita>,
-    Path((series_id, volume_id, chapter_id, page)): Path<(i32, i32, i32, i32)>
+    Path((series_id, volume_id, chapter_id, page)): Path<(i32, i32, i32, i32)>,
 ) -> (StatusCode, Response) {
     // info(&format!("Getting picture for series: {}, volume: {}, chapter: {}, page: {}", series_id, volume_id, chapter_id, page));
     let kavita_guard = kavita.lock().await;
     let picture = match kavita_guard.get_picture(&chapter_id, &page).await {
         Ok(p) => p,
         Err(err) => {
-            info(&format!("Failed to get picture (chapter_id={}, page={}): {}", chapter_id, page, err));
-            return (StatusCode::SERVICE_UNAVAILABLE, Response::new(Body::from("Failed to load picture")));
+            info(&format!(
+                "Failed to get picture (chapter_id={}, page={}): {}",
+                chapter_id, page, err
+            ));
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Response::new(Body::from("Failed to load picture")),
+            );
         }
     };
 
     let library_id = kavita_guard.get_series_library_id(series_id).unwrap_or(0);
 
     if let Err(err) = kavita_guard
-        .save_progress(&ReadProgress { 
-        id: None, 
-        library_id,
-        series_id, 
-        volume_id, 
-        chapter_id, 
-        page 
-    })
+        .save_progress(&ReadProgress {
+            id: None,
+            library_id,
+            series_id,
+            volume_id,
+            chapter_id,
+            page,
+        })
         .await
     {
         info(&format!(
@@ -330,7 +403,7 @@ async fn get_picture(
 
 async fn post_progress(
     Extension(kavita): Extension<SharedKavita>,
-    Path((series_id, volume_id, chapter_id, page)): Path<(i32, i32, i32, i32)>
+    Path((series_id, volume_id, chapter_id, page)): Path<(i32, i32, i32, i32)>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     info(&format!(
         "Received manual progress update request: series_id={} volume_id={} chapter_id={} page={}",
@@ -371,53 +444,62 @@ async fn post_progress(
 
 async fn read_volume(
     Extension(kavita): Extension<SharedKavita>,
-    Path((series_id, volume_id)): Path<(i32, i32)>
+    Path((series_id, volume_id)): Path<(i32, i32)>,
 ) -> (StatusCode, Json<()>) {
     info(&format!("Reading volume: {}, {}", series_id, volume_id));
     let kavita_guard = kavita.lock().await;
-    let _ = kavita_guard.set_volume_as_read(&series_id, &volume_id).await;
+    let _ = kavita_guard
+        .set_volume_as_read(&series_id, &volume_id)
+        .await;
     (StatusCode::OK, Json(()))
 }
 
 async fn unread_volume(
-    Extension(kavita): Extension<SharedKavita>, 
-    Path((series_id, volume_id)): Path<(i32, i32)>
+    Extension(kavita): Extension<SharedKavita>,
+    Path((series_id, volume_id)): Path<(i32, i32)>,
 ) -> (StatusCode, Json<()>) {
     info(&format!("Unreading volume: {}, {}", series_id, volume_id));
     let kavita_guard = kavita.lock().await;
-    let _ = kavita_guard.set_volume_as_unread(&series_id, &volume_id).await;
+    let _ = kavita_guard
+        .set_volume_as_unread(&series_id, &volume_id)
+        .await;
     (StatusCode::OK, Json(()))
 }
 
 async fn cache_serie_route(
     Extension(kavita): Extension<SharedKavita>,
-    Path(series_id): Path<i32>
+    Path(series_id): Path<i32>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let kavita_guard = kavita.lock().await;
     kavita_guard.cache_serie(series_id);
-    (StatusCode::OK, Json(serde_json::json!({"status": "caching started", "series_id": series_id})))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"status": "caching started", "series_id": series_id})),
+    )
 }
 
 async fn remove_series_cache_route(
     Extension(kavita): Extension<SharedKavita>,
-    Path(series_id): Path<i32>
+    Path(series_id): Path<i32>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let kavita_guard = kavita.lock().await;
     match kavita_guard.remove_series_cache(series_id) {
-        Ok(_) => {
-            (StatusCode::OK, Json(serde_json::json!({
+        Ok(_) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
                 "status": "success",
                 "message": format!("Cache removed for series {}", series_id),
                 "series_id": series_id
-            })))
-        }
-        Err(e) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
                 "status": "error",
                 "message": format!("Failed to remove cache: {}", e),
                 "series_id": series_id
-            })))
-        }
+            })),
+        ),
     }
 }
 
@@ -426,7 +508,10 @@ async fn start_websocket_server(sender: WebSocketSender) {
     let listener = match TcpListener::bind(addr).await {
         Ok(l) => l,
         Err(err) => {
-            info(&format!("Failed to bind WebSocket server {}: {}", addr, err));
+            info(&format!(
+                "Failed to bind WebSocket server {}: {}",
+                addr, err
+            ));
             return;
         }
     };
@@ -442,7 +527,10 @@ async fn start_websocket_server(sender: WebSocketSender) {
     }
 }
 
-async fn handle_websocket_connection(stream: TcpStream, sender: WebSocketSender) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_websocket_connection(
+    stream: TcpStream,
+    sender: WebSocketSender,
+) -> Result<(), Box<dyn std::error::Error>> {
     let ws_stream = accept_async(stream).await?;
     let (mut sender_ws, mut receiver_ws) = ws_stream.split();
     let mut rx = sender.subscribe();
@@ -485,17 +573,11 @@ async fn serve_frontend() -> Result<Html<String>, StatusCode> {
     Ok(Html(fallback_html::get_fallback_html().to_string()))
 }
 
-#[tokio::main]
-async fn start_server() {
-    // Print app version and Tauri version on startup
-    info("🚀 Manga4Deck v0.5.16 - Starting up...");
-    info(&format!("📦 Tauri version: {}", tauri::VERSION));
-
+async fn initialize_kavita() -> SharedKavita {
     // Create WebSocket broadcaster
     let (ws_sender, _) = broadcast::channel::<serde_json::Value>(100);
     let ws_sender_arc = Arc::new(ws_sender);
-    
-    // Create CORS layer (allow all origins and methods)
+
     let mut kavita = Kavita::new();
     // Store WebSocket sender in Kavita BEFORE reconnecting so status messages can be sent
     kavita.set_websocket_sender(ws_sender_arc.clone());
@@ -509,18 +591,22 @@ async fn start_server() {
             kavita_guard.send_connection_status(false, &kavita_guard.logged_as);
         }
     }
-    let kavita = Arc::new(Mutex::new(kavita));
-
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
 
     // Start WebSocket server in a separate task
     let ws_sender_for_server = (*ws_sender_arc).clone();
     tokio::spawn(async move {
         start_websocket_server(ws_sender_for_server).await;
     });
+
+    Arc::new(Mutex::new(kavita))
+}
+
+async fn run_http_server(kavita: SharedKavita) {
+    // Create CORS layer (allow all origins and methods)
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
 
     let app = Router::new()
         .route("/", get(serve_frontend))
@@ -536,12 +622,24 @@ async fn start_server() {
         .route("/api/volumes/{series_id}", get(get_volumes))
         .route("/api/series-cover/{series_id}", get(get_series_cover))
         .route("/api/volumes-cover/{volume_id}", get(get_volume_cover))
-        .route("/api/picture/{series}/{volume}/{chapter}/{page}", get(get_picture))
-        .route("/api/progress/{series_id}/{volume_id}/{chapter_id}/{page}", post(post_progress))
+        .route(
+            "/api/picture/{series}/{volume}/{chapter}/{page}",
+            get(get_picture),
+        )
+        .route(
+            "/api/progress/{series_id}/{volume_id}/{chapter_id}/{page}",
+            post(post_progress),
+        )
         .route("/api/read-volume/{series_id}/{volume_id}", get(read_volume))
-        .route("/api/unread-volume/{series_id}/{volume_id}", get(unread_volume))
+        .route(
+            "/api/unread-volume/{series_id}/{volume_id}",
+            get(unread_volume),
+        )
         .route("/api/cache/serie/{series_id}", get(cache_serie_route))
-        .route("/api/cache/remove/{series_id}", post(remove_series_cache_route))
+        .route(
+            "/api/cache/remove/{series_id}",
+            post(remove_series_cache_route),
+        )
         .layer(cors)
         .layer(Extension(kavita));
 
@@ -549,7 +647,10 @@ async fn start_server() {
     let listener = match tokio::net::TcpListener::bind(KAVITA_IP).await {
         Ok(l) => l,
         Err(err) => {
-            info(&format!("Failed to bind HTTP server {}: {}", KAVITA_IP, err));
+            info(&format!(
+                "Failed to bind HTTP server {}: {}",
+                KAVITA_IP, err
+            ));
             return;
         }
     };
@@ -559,6 +660,31 @@ async fn start_server() {
     }
 }
 
+#[cfg(feature = "tauri-ui")]
+async fn start_backend() {
+    let kavita = initialize_kavita().await;
+    run_http_server(kavita).await;
+}
+
+#[cfg(feature = "tauri-ui")]
+fn start_server() {
+    info("🚀 Manga4Deck v0.6.0 - Starting up...");
+    #[cfg(feature = "tauri-ui")]
+    info(&format!("📦 Tauri version: {}", tauri::VERSION));
+
+    tokio::runtime::Runtime::new()
+        .expect("failed to create backend tokio runtime")
+        .block_on(start_backend());
+}
+
+#[cfg(any(
+    all(feature = "tauri-ui", feature = "dioxus-ui"),
+))]
+compile_error!("Enable only one frontend feature: `tauri-ui` or `dioxus-ui`.");
+
+#[cfg(not(any(feature = "tauri-ui", feature = "dioxus-ui")))]
+compile_error!("Enable one frontend feature: `tauri-ui` or `dioxus-ui`.");
+
 fn main() {
     // Force software rendering to avoid EGL issues on Steam Deck
     std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
@@ -566,7 +692,7 @@ fn main() {
     std::env::set_var("MESA_LOADER_DRIVER_OVERRIDE", "swrast");
     std::env::set_var("MESA_GL_VERSION_OVERRIDE", "2.1");
     std::env::set_var("MESA_GLSL_VERSION_OVERRIDE", "120");
-    
+
     // Disable all hardware acceleration
     std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
     std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
@@ -580,7 +706,7 @@ fn main() {
     std::env::set_var("WEBKIT_DISABLE_ACCELERATED_2D_CANVAS", "1");
     std::env::set_var("WEBKIT_DISABLE_ACCELERATED_VIDEO", "1");
     std::env::set_var("WEBKIT_DISABLE_COMPOSITING", "1");
-    
+
     // Force X11 and disable Wayland
     if std::env::var("DISPLAY").is_err() {
         std::env::set_var("DISPLAY", ":0");
@@ -589,15 +715,33 @@ fn main() {
     std::env::set_var("XDG_SESSION_TYPE", "x11");
     std::env::set_var("GDK_BACKEND", "x11");
     std::env::set_var("QT_QPA_PLATFORM", "xcb");
-    
+
+    run_frontend();
+}
+
+#[cfg(feature = "tauri-ui")]
+fn run_frontend() {
     tauri::Builder::default()
         .setup(|_| {
-            std::thread::spawn(|| {
-                start_server();
-            }); 
+            std::thread::spawn(start_server);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![exit_app])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(feature = "dioxus-ui")]
+fn run_frontend() {
+    info("🚀 Manga4Deck v0.6.0 - Starting Manga4Deck native UI...");
+
+    let runtime = tokio::runtime::Runtime::new().expect("failed to create native UI tokio runtime");
+    let _runtime_guard = runtime.enter();
+    let kavita = runtime.block_on(initialize_kavita());
+    let server_kavita = kavita.clone();
+    runtime.spawn(async move {
+        run_http_server(server_kavita).await;
+    });
+
+    dioxus_ui::run_ui(kavita);
 }
