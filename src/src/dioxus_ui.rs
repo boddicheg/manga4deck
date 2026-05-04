@@ -12,6 +12,7 @@ pub type SharedKavita = Arc<Mutex<Kavita>>;
 
 static KAVITA: OnceCell<SharedKavita> = OnceCell::new();
 const READER_BATCH_SIZE: i32 = 10;
+const SHELF_COLUMNS: usize = 7;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -190,7 +191,7 @@ fn visible_tile_count(
 
 fn tile_columns(page: Page) -> usize {
     match page {
-        Page::Libraries | Page::Series | Page::Volumes => 8,
+        Page::Libraries | Page::Series | Page::Volumes => SHELF_COLUMNS,
         Page::Dashboard => 6,
         Page::Reader => 1,
         Page::Settings => 1,
@@ -346,7 +347,7 @@ html, body, #main {
     linear-gradient(90deg, #8a552c 0%, #a66a3a 44%, #805026 100%);
 }
 .series-titlebar {
-  height: 48px;
+  height: 34px;
   display: grid;
   grid-template-columns: 120px 1fr 120px;
   align-items: center;
@@ -356,7 +357,7 @@ html, body, #main {
 .series-titlebar h1 {
   margin: 0;
   text-align: center;
-  font-size: 20px;
+  font-size: 18px;
   line-height: 1;
   font-weight: 900;
   color: #f5f5f5;
@@ -381,12 +382,12 @@ html, body, #main {
 }
 .series-section {
   position: relative;
-  padding: 26px 16px 42px;
+  padding: 16px 16px 42px;
 }
 .series-section-title {
-  margin: 0 0 24px;
+  margin: 0 0 18px;
   color: #fff;
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 900;
   text-shadow: 0 2px 4px rgba(0,0,0,0.45);
 }
@@ -394,14 +395,14 @@ html, body, #main {
   color: rgba(255,255,255,0.72);
 }
 .dashboard-status {
-  height: 42px;
-  margin: 18px 16px 0;
+  height: 34px;
+  margin: 12px 16px 0;
   display: flex;
   align-items: center;
   justify-content: center;
   background: #22c55e;
   color: #fff;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 800;
   box-shadow: 0 4px 10px rgba(0,0,0,0.25);
 }
@@ -679,7 +680,7 @@ html, body, #main {
   color: #fff;
 }
 .reader-bar {
-  height: 38px;
+  height: 34px;
   display: grid;
   grid-template-columns: 120px 1fr 120px;
   align-items: center;
@@ -714,7 +715,7 @@ html, body, #main {
   font-weight: 700;
 }
 .reader-stage {
-  min-height: calc(100vh - 38px);
+  min-height: calc(100vh - 34px);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -904,7 +905,7 @@ fn app() -> Element {
                                             r#"
                                             const reader = document.querySelector(".reader-page");
                                             if (reader) {
-                                                reader.scrollBy({ top: Math.floor(reader.clientHeight * 0.82), behavior: "smooth" });
+                                                reader.scrollBy({ top: Math.floor(reader.clientHeight * 0.41), behavior: "smooth" });
                                             }
                                             "#,
                                         );
@@ -914,7 +915,7 @@ fn app() -> Element {
                                             r#"
                                             const reader = document.querySelector(".reader-page");
                                             if (reader) {
-                                                reader.scrollBy({ top: -Math.floor(reader.clientHeight * 0.82), behavior: "smooth" });
+                                                reader.scrollBy({ top: -Math.floor(reader.clientHeight * 0.41), behavior: "smooth" });
                                             }
                                             "#,
                                         );
@@ -1671,15 +1672,17 @@ fn app() -> Element {
 
 pub fn run_ui(kavita: SharedKavita) {
     let _ = KAVITA.set(kavita);
+    let window = WindowBuilder::new()
+        .with_title("Manga4Deck")
+        .with_inner_size(LogicalSize::new(1280.0, 720.0))
+        .with_always_on_top(false);
+    #[cfg(target_os = "linux")]
+    let window = window.with_decorations(false);
+
     dioxus::LaunchBuilder::desktop()
         .with_cfg(
             Config::new()
-                .with_window(
-                    WindowBuilder::new()
-                        .with_title("Manga4Deck")
-                        .with_inner_size(LogicalSize::new(1280.0, 720.0))
-                        .with_always_on_top(false),
-                )
+                .with_window(window)
                 .with_menu(None),
         )
         .launch(app);
