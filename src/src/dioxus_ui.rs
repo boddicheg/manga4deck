@@ -212,6 +212,46 @@ fn move_selection(current: usize, key: &str, count: usize, columns: usize) -> us
     }
 }
 
+fn move_series_selection(
+    current: usize,
+    key: &str,
+    in_progress_count: usize,
+    completed_count: usize,
+    columns: usize,
+) -> usize {
+    if in_progress_count == 0 || completed_count == 0 {
+        return move_selection(current, key, in_progress_count + completed_count + 1, columns);
+    }
+
+    match key {
+        "ArrowDown" if current <= in_progress_count => {
+            let target = current + columns;
+            if target <= in_progress_count {
+                target
+            } else {
+                let column = current % columns;
+                in_progress_count + 1 + column.min(completed_count - 1)
+            }
+        }
+        "ArrowUp" if current > in_progress_count => {
+            let completed_index = current - in_progress_count - 1;
+            if completed_index >= columns {
+                current - columns
+            } else {
+                let column = completed_index % columns;
+                let last_in_progress_row = (in_progress_count / columns) * columns;
+                (last_in_progress_row + column).min(in_progress_count)
+            }
+        }
+        _ => move_selection(
+            current,
+            key,
+            in_progress_count + completed_count + 1,
+            columns,
+        ),
+    }
+}
+
 fn selected_series(series: &[Series], selected: usize) -> Option<&Series> {
     if selected == 0 {
         return None;
@@ -994,7 +1034,23 @@ fn app() -> Element {
                         } else {
                             let count = visible_tile_count(page(), &libraries.read(), &series.read(), &volumes.read());
                             let current = selected_index().min(count.saturating_sub(1));
-                            let next = move_selection(current, key.as_str(), count, tile_columns(page()));
+                            let next = if page() == Page::Series {
+                                let series_snapshot = series.read();
+                                let in_progress_count = series_snapshot
+                                    .iter()
+                                    .filter(|item| item.read < 100)
+                                    .count();
+                                let completed_count = series_snapshot.len().saturating_sub(in_progress_count);
+                                move_series_selection(
+                                    current,
+                                    key.as_str(),
+                                    in_progress_count,
+                                    completed_count,
+                                    SHELF_COLUMNS,
+                                )
+                            } else {
+                                move_selection(current, key.as_str(), count, tile_columns(page()))
+                            };
                             selected_index.set(next);
                             match page() {
                                 Page::Dashboard => dashboard_selection.set(next),
