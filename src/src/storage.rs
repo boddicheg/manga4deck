@@ -144,6 +144,7 @@ impl Database {
                 read: row.get(2)?,
                 pages: row.get(3)?,
                 library_id: library_id.clone(),
+                is_cached: false,
             })
         })?;
         Ok(series.collect::<Result<Vec<Series>, rusqlite::Error>>()?)
@@ -415,6 +416,62 @@ impl Database {
             }
             Err(_) => false,
         }
+    }
+
+    pub fn is_volume_fully_cached(&self, volume_id: i32) -> bool {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = match conn.prepare(
+            "SELECT pages, chapter_id FROM volumes WHERE id = ? AND pages > 0",
+        ) {
+            Ok(stmt) => stmt,
+            Err(_) => return false,
+        };
+        let (pages, chapter_id): (i32, i32) =
+            match stmt.query_row([volume_id.to_string()], |row| Ok((row.get(0)?, row.get(1)?))) {
+                Ok(row) => row,
+                Err(_) => return false,
+            };
+
+        let mut stmt = match conn.prepare(
+            "SELECT COUNT(DISTINCT page) FROM manga_pictures WHERE chapter_id = ?",
+        ) {
+            Ok(stmt) => stmt,
+            Err(_) => return false,
+        };
+        let cached_pages = stmt
+            .query_row([chapter_id.to_string()], |row| row.get::<_, i32>(0))
+            .unwrap_or(0);
+        cached_pages >= pages
+    }
+
+    pub fn is_series_fully_cached(&self, series_id: i32) -> bool {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = match conn.prepare(
+            "SELECT COALESCE(SUM(pages), 0) FROM volumes WHERE series_id = ? AND pages > 0",
+        ) {
+            Ok(stmt) => stmt,
+            Err(_) => return false,
+        };
+        let total_pages = stmt
+            .query_row([series_id.to_string()], |row| row.get::<_, i32>(0))
+            .unwrap_or(0);
+        if total_pages <= 0 {
+            return false;
+        }
+
+        let mut stmt = match conn.prepare(
+            "SELECT COUNT(DISTINCT mp.chapter_id || ':' || mp.page)
+             FROM manga_pictures mp
+             INNER JOIN volumes v ON mp.chapter_id = v.chapter_id
+             WHERE v.series_id = ? AND v.pages > 0",
+        ) {
+            Ok(stmt) => stmt,
+            Err(_) => return false,
+        };
+        let cached_pages = stmt
+            .query_row([series_id.to_string()], |row| row.get::<_, i32>(0))
+            .unwrap_or(0);
+        cached_pages >= total_pages
     }
 
     // Get all picture files for a series (through volumes)

@@ -107,6 +107,16 @@ fn load_volumes(series_id: i32) -> Result<Vec<Volume>, String> {
     })
 }
 
+fn load_cached_volumes(series_id: i32) -> Result<Vec<Volume>, String> {
+    tokio::runtime::Handle::current().block_on(async {
+        let kavita = kavita();
+        let kavita = kavita.lock().await;
+        kavita
+            .get_cached_volumes(&series_id)
+            .map_err(|err| err.to_string())
+    })
+}
+
 fn toggle_volume_read(volume: &Volume) -> Result<bool, String> {
     tokio::runtime::Handle::current().block_on(async {
         let kavita = kavita();
@@ -146,6 +156,24 @@ fn is_series_caching(series_id: i32) -> bool {
         let kavita = kavita();
         let kavita = kavita.lock().await;
         kavita.is_series_caching(series_id)
+    })
+}
+
+fn is_series_fully_cached(series_id: i32) -> bool {
+    tokio::runtime::Handle::current().block_on(async {
+        let kavita = kavita();
+        let kavita = kavita.lock().await;
+        kavita.is_series_cached(series_id)
+    })
+}
+
+fn remove_series_cache(series_id: i32) -> Result<(), String> {
+    tokio::runtime::Handle::current().block_on(async {
+        let kavita = kavita();
+        let kavita = kavita.lock().await;
+        kavita
+            .remove_series_cache(series_id)
+            .map_err(|err| err.to_string())
     })
 }
 
@@ -351,6 +379,37 @@ fn next_reader_batch_end(current_end: i32, total_pages: i32) -> i32 {
     }
 }
 
+fn show_toast(
+    status: &mut Signal<UiStatus>,
+    toast: &mut Signal<Option<String>>,
+    toast_generation: &mut Signal<u64>,
+    message: String,
+) {
+    status.write().message = message.clone();
+    toast.set(Some(message));
+    toast_generation.set(toast_generation().wrapping_add(1));
+}
+
+fn push_toast(
+    message: String,
+) {
+    let message = serde_json::to_string(&message).unwrap_or_else(|_| "\"\"".to_string());
+    document::eval(&format!(
+        r#"
+        (() => {{
+            const existing = document.querySelector(".toast.cache-toast");
+            if (existing) existing.remove();
+            const toast = document.createElement("div");
+            toast.className = "toast cache-toast";
+            toast.textContent = {};
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }})();
+        "#,
+        message
+    ));
+}
+
 const STYLE: &str = r#"
 html, body, #main {
   width: 100%;
@@ -427,6 +486,37 @@ html, body, #main {
   margin-top: 12px;
   color: #fff;
   font-size: 12px;
+}
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 100;
+  max-width: min(680px, calc(100vw - 40px));
+  box-sizing: border-box;
+  padding: 12px 18px;
+  border: 1px solid rgba(96,165,250,0.55);
+  border-radius: 6px;
+  background: rgba(8,12,20,0.92);
+  color: #eef6ff;
+  box-shadow: 0 10px 28px rgba(0,0,0,0.45), 0 0 20px rgba(56,189,248,0.18);
+  transform: translateX(-50%);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-align: center;
+  pointer-events: none;
+  animation: toast-in 140ms ease-out;
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
 }
 .settings {
   display: flex;
@@ -943,6 +1033,8 @@ fn app() -> Element {
     let mut series_selection = use_signal(|| 0usize);
     let mut volumes_selection = use_signal(|| 0usize);
     let mut status = use_signal(|| initial_status.clone());
+    let mut toast = use_signal(|| None::<String>);
+    let mut toast_generation = use_signal(|| 0u64);
     let mut libraries = use_signal(Vec::<Library>::new);
     let mut series = use_signal(Vec::<Series>::new);
     let mut volumes = use_signal(Vec::<Volume>::new);
@@ -956,6 +1048,7 @@ fn app() -> Element {
     let mut username = use_signal(|| initial_status.logged_as);
     let mut password = use_signal(String::new);
     let mut api_key = use_signal(String::new);
+    let mut cache_events_started = use_signal(|| false);
 
     use_effect(move || {
         let _ = selected_index();
@@ -990,7 +1083,102 @@ fn app() -> Element {
         }
     });
 
+    use_effect(move || {
+        let generation = toast_generation();
+        if toast.read().is_some() {
+            spawn(async move {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                if toast_generation() == generation {
+                    toast.set(None);
+                }
+            });
+        }
+    });
+
+    use_effect(move || {
+        if cache_events_started() {
+            return;
+        }
+        cache_events_started.set(true);
+
+        spawn(async move {
+            let mut rx = {
+                let kavita = kavita();
+                let kavita = kavita.lock().await;
+                kavita.ws_sender.as_ref().map(|sender| sender.subscribe())
+            };
+
+            let Some(ref mut rx) = rx else {
+                return;
+            };
+
+            while let Ok(msg) = rx.recv().await {
+                let event = msg["event"].as_str().unwrap_or("");
+                if !matches!(
+                    event,
+                    "volume_caching_start" | "volume_cached" | "caching_end" | "caching_cancelled"
+                ) {
+                    continue;
+                }
+
+                if let Some(message) = msg["message"].as_str() {
+                    push_toast(message.to_string());
+                }
+
+                let event_series_id = msg["data"]["series_id"].as_i64().map(|id| id as i32);
+                let should_refresh_volumes = event_series_id.map(|series_id| {
+                    if page() == Page::Volumes {
+                        volumes
+                            .read()
+                            .first()
+                            .map(|volume| volume.series_id == series_id)
+                            .unwrap_or(false)
+                    } else if page() == Page::Reader {
+                        reader_volume
+                            .read()
+                            .as_ref()
+                            .map(|volume| volume.series_id == series_id)
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    }
+                });
+
+                if should_refresh_volumes.unwrap_or(false) {
+                    if let Some(series_id) = event_series_id {
+                        let refreshed = {
+                            let kavita = kavita();
+                            let kavita = kavita.lock().await;
+                            kavita
+                                .get_cached_volumes(&series_id)
+                                .map_err(|err| err.to_string())
+                        };
+                        match refreshed {
+                            Ok(items) => volumes.set(items),
+                            Err(err) => push_toast(
+                                format!("Failed to refresh cached volumes: {err}"),
+                            ),
+                        }
+                    }
+                }
+
+                if matches!(event, "caching_end" | "caching_cancelled") {
+                    if let Some(series_id) = event_series_id {
+                        let mut updated = series.read().clone();
+                        for item in &mut updated {
+                            if item.id == series_id {
+                                item.is_cached = event == "caching_end";
+                            }
+                        }
+                        series.set(updated);
+                    }
+                }
+            }
+        });
+    });
+
     let status_snapshot = status.read().clone();
+    let toast_snapshot = toast.read().clone();
     let page_snapshot = page();
     let libraries_snapshot = libraries.read().clone();
     let series_snapshot = series.read().clone();
@@ -1135,22 +1323,60 @@ fn app() -> Element {
                                 0 => match load_libraries() {
                                     Ok(items) => {
                                         libraries.set(items);
-                                        status.write().message = format!("Loaded {} libraries", libraries.read().len());
+                                        show_toast(
+                                            &mut status,
+                                            &mut toast,
+                                            &mut toast_generation,
+                                            format!("Loaded {} libraries", libraries.read().len()),
+                                        );
                                         dashboard_selection.set(selected);
                                         selected_index.set(0);
                                         page.set(Page::Libraries);
                                     }
-                                    Err(err) => status.write().message = format!("Failed to load libraries: {err}"),
+                                    Err(err) => show_toast(
+                                        &mut status,
+                                        &mut toast,
+                                        &mut toast_generation,
+                                        format!("Failed to load libraries: {err}"),
+                                    ),
                                 },
                                 1 => match clear_cache() {
-                                    Ok(()) => status.set(load_status()),
-                                    Err(err) => status.write().message = format!("Failed to clear cache: {err}"),
+                                    Ok(()) => {
+                                        status.set(load_status());
+                                        show_toast(
+                                            &mut status,
+                                            &mut toast,
+                                            &mut toast_generation,
+                                            "Cache cleared".to_string(),
+                                        );
+                                    }
+                                    Err(err) => show_toast(
+                                        &mut status,
+                                        &mut toast,
+                                        &mut toast_generation,
+                                        format!("Failed to clear cache: {err}"),
+                                    ),
                                 },
                                 2 => {
-                                    status.write().message = "Updating server library...".into();
+                                    show_toast(
+                                        &mut status,
+                                        &mut toast,
+                                        &mut toast_generation,
+                                        "Updating server library...".to_string(),
+                                    );
                                     match update_server_library() {
-                                        Ok(()) => status.write().message = "Server library update requested".into(),
-                                        Err(err) => status.write().message = format!("Server library update failed: {err}"),
+                                        Ok(()) => show_toast(
+                                            &mut status,
+                                            &mut toast,
+                                            &mut toast_generation,
+                                            "Server library update requested".to_string(),
+                                        ),
+                                        Err(err) => show_toast(
+                                            &mut status,
+                                            &mut toast,
+                                            &mut toast_generation,
+                                            format!("Server library update failed: {err}"),
+                                        ),
                                     }
                                 }
                                 3 => {
@@ -1159,8 +1385,22 @@ fn app() -> Element {
                                     page.set(Page::Settings);
                                 }
                                 4 => match toggle_offline() {
-                                    Ok(_) => status.set(load_status()),
-                                    Err(err) => status.write().message = format!("Offline toggle failed: {err}"),
+                                    Ok(_) => {
+                                        status.set(load_status());
+                                        let message = status.read().message.clone();
+                                        show_toast(
+                                            &mut status,
+                                            &mut toast,
+                                            &mut toast_generation,
+                                            message,
+                                        );
+                                    }
+                                    Err(err) => show_toast(
+                                        &mut status,
+                                        &mut toast,
+                                        &mut toast_generation,
+                                        format!("Offline toggle failed: {err}"),
+                                    ),
                                 },
                                 5 => exit_process(),
                                 _ => {}
@@ -1174,12 +1414,22 @@ fn app() -> Element {
                                     match load_series(id) {
                                         Ok(items) => {
                                             series.set(items);
-                                            status.write().message = format!("Loaded series for library id {id}");
+                                            show_toast(
+                                                &mut status,
+                                                &mut toast,
+                                                &mut toast_generation,
+                                                format!("Loaded series for library id {id}"),
+                                            );
                                             libraries_selection.set(selected);
                                             selected_index.set(0);
                                             page.set(Page::Series);
                                         }
-                                        Err(err) => status.write().message = format!("Failed to load series: {err}"),
+                                        Err(err) => show_toast(
+                                            &mut status,
+                                            &mut toast,
+                                            &mut toast_generation,
+                                            format!("Failed to load series: {err}"),
+                                        ),
                                     }
                                 }
                             }
@@ -1193,13 +1443,23 @@ fn app() -> Element {
                                         Ok(items) => {
                                             let volume_selection = first_non_complete_volume_selection(&items);
                                             volumes.set(items);
-                                            status.write().message = format!("Loaded volumes for series id {id}");
+                                            show_toast(
+                                                &mut status,
+                                                &mut toast,
+                                                &mut toast_generation,
+                                                format!("Loaded volumes for series id {id}"),
+                                            );
                                             series_selection.set(selected);
                                             selected_index.set(volume_selection);
                                             volumes_selection.set(volume_selection);
                                             page.set(Page::Volumes);
                                         }
-                                        Err(err) => status.write().message = format!("Failed to load volumes: {err}"),
+                                        Err(err) => show_toast(
+                                            &mut status,
+                                            &mut toast,
+                                            &mut toast_generation,
+                                            format!("Failed to load volumes: {err}"),
+                                        ),
                                     }
                                 }
                             }
@@ -1263,15 +1523,31 @@ fn app() -> Element {
                                                     selected_index.set(selected);
                                                     volumes_selection.set(selected);
                                                 }
-                                                Err(err) => status.write().message = format!("Failed to refresh volumes: {err}"),
+                                                Err(err) => show_toast(
+                                                    &mut status,
+                                                    &mut toast,
+                                                    &mut toast_generation,
+                                                    format!("Failed to refresh volumes: {err}"),
+                                                ),
                                             }
-                                            status.write().message = if marked_read {
+                                            let message = if marked_read {
                                                 format!("Marked {} as read", volume.title)
                                             } else {
                                                 format!("Marked {} as unread", volume.title)
                                             };
+                                            show_toast(
+                                                &mut status,
+                                                &mut toast,
+                                                &mut toast_generation,
+                                                message,
+                                            );
                                         }
-                                        Err(err) => status.write().message = format!("Failed to update volume: {err}"),
+                                        Err(err) => show_toast(
+                                            &mut status,
+                                            &mut toast,
+                                            &mut toast_generation,
+                                            format!("Failed to update volume: {err}"),
+                                        ),
                                     }
                                 }
                             }
@@ -1283,7 +1559,7 @@ fn app() -> Element {
                             Page::Series => {
                                 let series_snapshot = series.read();
                                 selected_series(&series_snapshot, selected_index())
-                                    .map(|item| (item.id, item.title.clone()))
+                                    .map(|item| (item.id, item.title.clone(), Some(item.library_id)))
                             }
                             Page::Volumes => {
                                 let volumes_snapshot = volumes.read();
@@ -1293,32 +1569,104 @@ fn app() -> Element {
                                 } else {
                                     volumes_snapshot.first()
                                 };
-                                volume.map(|item| (item.series_id, format!("series {}", item.series_id)))
+                                let library_id = current_series_library_id(
+                                    &series.read(),
+                                    &libraries.read(),
+                                    libraries_selection(),
+                                );
+                                volume.map(|item| {
+                                    (item.series_id, format!("series {}", item.series_id), library_id)
+                                })
                             }
                             Page::Reader => reader_volume
                                 .read()
                                 .as_ref()
-                                .map(|item| (item.series_id, format!("series {}", item.series_id))),
+                                .map(|item| {
+                                    let library_id = current_series_library_id(
+                                        &series.read(),
+                                        &libraries.read(),
+                                        libraries_selection(),
+                                    );
+                                    (item.series_id, format!("series {}", item.series_id), library_id)
+                                }),
                             Page::Dashboard | Page::Libraries | Page::Settings => None,
                         };
 
-                        if let Some((series_id, title)) = current_series {
+                        if let Some((series_id, title, library_id)) = current_series {
+                            if is_series_fully_cached(series_id) {
+                                match remove_series_cache(series_id) {
+                                    Ok(()) => {
+                                        if matches!(page(), Page::Volumes | Page::Reader) {
+                                            match load_cached_volumes(series_id) {
+                                                Ok(items) => volumes.set(items),
+                                                Err(err) => show_toast(
+                                                    &mut status,
+                                                    &mut toast,
+                                                    &mut toast_generation,
+                                                    format!("Failed to refresh volumes: {err}"),
+                                                ),
+                                            }
+                                        }
+                                        if let Some(library_id) = library_id {
+                                            match load_series(library_id) {
+                                                Ok(items) => series.set(items),
+                                                Err(err) => show_toast(
+                                                    &mut status,
+                                                    &mut toast,
+                                                    &mut toast_generation,
+                                                    format!("Failed to refresh series: {err}"),
+                                                ),
+                                            }
+                                        }
+                                        show_toast(
+                                            &mut status,
+                                            &mut toast,
+                                            &mut toast_generation,
+                                            format!("Removed cached volumes for {}", title),
+                                        );
+                                    }
+                                    Err(err) => show_toast(
+                                        &mut status,
+                                        &mut toast,
+                                        &mut toast_generation,
+                                        format!("Failed to remove cached volumes: {err}"),
+                                    ),
+                                }
+                                return;
+                            }
+
                             if page() == Page::Series && !is_series_caching(series_id) {
                                 if let Err(err) = load_volumes(series_id) {
-                                    status.write().message = format!("Failed to prepare cache: {err}");
+                                    show_toast(
+                                        &mut status,
+                                        &mut toast,
+                                        &mut toast_generation,
+                                        format!("Failed to prepare cache: {err}"),
+                                    );
                                     return;
                                 }
                             }
 
                             match toggle_series_caching(series_id) {
                                 Ok(started) => {
-                                    status.write().message = if started {
+                                    let message = if started {
                                         format!("Started caching {}", title)
                                     } else {
                                         format!("Stopped caching {}", title)
                                     };
+                                    show_toast(
+                                        &mut status,
+                                        &mut toast,
+                                        &mut toast_generation,
+                                        message,
+                                    );
                                 }
-                                Err(err) => status.write().message = format!("Failed to toggle cache: {err}"),
+                                Err(err) => show_toast(
+                                    &mut status,
+                                    &mut toast,
+                                    &mut toast_generation,
+                                    format!("Failed to toggle cache: {err}"),
+                                ),
                             }
                         }
                     }
@@ -1371,6 +1719,9 @@ fn app() -> Element {
                     | Page::Reader
             ) {
                 div { class: "status", "{status_snapshot.line()}" }
+            }
+            if let Some(message) = toast_snapshot {
+                div { class: "toast", "{message}" }
             }
             div { class: "tiles",
                 {
@@ -1551,8 +1902,19 @@ fn app() -> Element {
                                                 let id = item.id;
                                                 let title = item.title.clone();
                                                 let progress = item.read.clamp(0, 100);
+                                                let cached = item.is_cached;
                                                 let cover_url = format!("http://localhost:11337/api/series-cover/{id}?thumb=1");
                                                 let class = if selected_snapshot == index + 1 { "series-card selected" } else { "series-card" };
+                                                let progress_class = if cached {
+                                                    "series-progress-fill cached"
+                                                } else {
+                                                    "series-progress-fill"
+                                                };
+                                                let title_class = if cached {
+                                                    "series-card-title cached"
+                                                } else {
+                                                    "series-card-title"
+                                                };
                                                 rsx! {
                                                     div { class: "series-card-wrap",
                                                         button {
@@ -1574,11 +1936,11 @@ fn app() -> Element {
                                                             },
                                                             div { class: "series-progress",
                                                                 div {
-                                                                    class: "series-progress-fill",
+                                                                    class: "{progress_class}",
                                                                     style: "width: {progress}%;"
                                                                 }
                                                             }
-                                                            div { class: "series-card-title",
+                                                            div { class: "{title_class}",
                                                                 span { "{title}" }
                                                             }
                                                         }
@@ -1615,6 +1977,16 @@ fn app() -> Element {
                                                 let cover_url = format!("http://localhost:11337/api/series-cover/{id}?thumb=1");
                                                 let nav_index = in_progress_series.len() + index + 1;
                                                 let class = if selected_snapshot == nav_index { "series-card selected" } else { "series-card" };
+                                                let progress_class = if item.is_cached {
+                                                    "series-progress-fill complete cached"
+                                                } else {
+                                                    "series-progress-fill complete"
+                                                };
+                                                let title_class = if item.is_cached {
+                                                    "series-card-title complete cached"
+                                                } else {
+                                                    "series-card-title complete"
+                                                };
                                                 rsx! {
                                                     div { class: "series-card-wrap",
                                                         button {
@@ -1636,11 +2008,11 @@ fn app() -> Element {
                                                             },
                                                             div { class: "series-progress",
                                                                 div {
-                                                                    class: "series-progress-fill complete",
+                                                                    class: "{progress_class}",
                                                                     style: "width: {progress}%;"
                                                                 }
                                                             }
-                                                            div { class: "series-card-title complete",
+                                                            div { class: "{title_class}",
                                                                 span { "{title}" }
                                                             }
                                                         }

@@ -139,6 +139,7 @@ pub struct Series {
     pub title: String,
     pub read: i32,
     pub pages: i32,
+    pub is_cached: bool,
 }
 
 #[derive(Clone)]
@@ -512,6 +513,7 @@ impl Kavita {
                         }
                     },
                     pages: v["pages"].as_i64().unwrap_or(0) as i32,
+                    is_cached: false,
                 })
                 .collect();
             for series in series {
@@ -530,6 +532,9 @@ impl Kavita {
             self.pull_series(library_id).await?;
         }
         let mut series = self.db.get_series(library_id)?;
+        for item in &mut series {
+            item.is_cached = self.is_series_cached(item.id);
+        }
         // return only cached series
         if self.offline_mode {
             series = series
@@ -753,6 +758,24 @@ impl Kavita {
             self.offline_mode,
             volumes.len()
         ));
+        Ok(volumes)
+    }
+
+    pub fn get_cached_volumes(
+        &self,
+        series_id: &i32,
+    ) -> Result<Vec<Volume>, Box<dyn std::error::Error>> {
+        let mut volumes = self.db.get_volumes(series_id)?;
+        volumes.sort_by_key(|v| {
+            v.title
+                .clone()
+                .replace(|c: char| !c.is_digit(10), "")
+                .parse::<i32>()
+                .unwrap_or(0)
+        });
+        for v in &mut volumes {
+            v.is_cached = self.is_volume_cached(v.id);
+        }
         Ok(volumes)
     }
 
@@ -1171,27 +1194,12 @@ impl Kavita {
 
     // Check if all volumes in a series are cached
     pub fn is_series_cached(&self, series_id: i32) -> bool {
-        let volumes = self.db.get_volumes(&series_id).unwrap_or_default();
-        for volume in volumes {
-            if !self.is_volume_cached(volume.id) {
-                return false;
-            }
-        }
-        true
+        self.db.is_series_fully_cached(series_id)
     }
 
     // Check if all pages in a volume are cached
     pub fn is_volume_cached(&self, volume_id: i32) -> bool {
-        if let Some((chapter_id, pages)) = self.db.get_volume_chapter_and_pages(volume_id) {
-            for page in 0..pages {
-                if !self.db.is_picture_cached(chapter_id, page) {
-                    return false;
-                }
-            }
-            true
-        } else {
-            false
-        }
+        self.db.is_volume_fully_cached(volume_id)
     }
 
     // Add a series to the caching queue and start the thread if not running
@@ -1359,6 +1367,21 @@ fn cache_serie_threaded(
                     "Start caching volume {} (title: {}) in series {}",
                     volume.id, volume.title, series_id
                 ));
+                if let Some(sender) = &ws_sender {
+                    let volume_start_msg = serde_json_json!({
+                        "event": "volume_caching_start",
+                        "message": format!(
+                            "Start caching volume {} (title: {}) in series {}",
+                            volume.id, volume.title, series_id
+                        ),
+                        "data": {
+                            "series_id": series_id,
+                            "volume_id": volume.id,
+                            "volume_title": volume.title
+                        }
+                    });
+                    let _ = sender.send(volume_start_msg);
+                }
                 if let Some((chapter_id, pages)) = db.get_volume_chapter_and_pages(volume.id) {
                     for page in 0..pages {
                         if cancelled_series.lock().unwrap().contains(&series_id) {
@@ -1402,7 +1425,10 @@ fn cache_serie_threaded(
                 if let Some(sender) = &ws_sender {
                     let volume_msg = serde_json_json!({
                         "event": "volume_cached",
-                        "message": format!("Cached volume: {}", volume.title),
+                        "message": format!(
+                            "Finished caching volume {} (title: {}) in series {}",
+                            volume.id, volume.title, series_id
+                        ),
                         "data": {
                             "series_id": series_id,
                             "volume_id": volume.id,
@@ -1435,7 +1461,7 @@ fn cache_serie_threaded(
                     "message": if cancelled {
                         format!("Stopped caching series {}", series_id)
                     } else {
-                        format!("Finished caching series {}", series_id)
+                        format!("Finished caching whole series {}", series_id)
                     },
                     "data": {
                         "series_id": series_id,
