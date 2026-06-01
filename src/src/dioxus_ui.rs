@@ -224,6 +224,27 @@ fn selected_series(series: &[Series], selected: usize) -> Option<&Series> {
         .nth(selected - 1)
 }
 
+fn current_series_library_id(
+    series: &[Series],
+    libraries: &[Library],
+    libraries_selection: usize,
+) -> Option<i32> {
+    series.first().map(|item| item.library_id).or_else(|| {
+        libraries_selection
+            .checked_sub(1)
+            .and_then(|index| libraries.get(index))
+            .map(|library| library.id)
+    })
+}
+
+fn first_non_complete_volume_selection(volumes: &[Volume]) -> usize {
+    volumes
+        .iter()
+        .position(|volume| volume.pages <= 0 || volume.read < volume.pages)
+        .map(|index| index + 1)
+        .unwrap_or(0)
+}
+
 fn initial_reader_page(volume: &Volume) -> i32 {
     if volume.pages <= 0 {
         0
@@ -1033,10 +1054,12 @@ fn app() -> Element {
                                     let id = item.id;
                                     match load_volumes(id) {
                                         Ok(items) => {
+                                            let volume_selection = first_non_complete_volume_selection(&items);
                                             volumes.set(items);
                                             status.write().message = format!("Loaded volumes for series id {id}");
                                             series_selection.set(selected);
-                                            selected_index.set(0);
+                                            selected_index.set(volume_selection);
+                                            volumes_selection.set(volume_selection);
                                             page.set(Page::Volumes);
                                         }
                                         Err(err) => status.write().message = format!("Failed to load volumes: {err}"),
@@ -1045,6 +1068,17 @@ fn app() -> Element {
                             }
                             Page::Volumes => {
                                 if selected == 0 {
+                                    let library_id = current_series_library_id(
+                                        &series.read(),
+                                        &libraries.read(),
+                                        libraries_selection(),
+                                    );
+                                    if let Some(library_id) = library_id {
+                                        match load_series(library_id) {
+                                            Ok(items) => series.set(items),
+                                            Err(err) => status.write().message = format!("Failed to refresh series: {err}"),
+                                        }
+                                    }
                                     selected_index.set(series_selection());
                                     page.set(Page::Series);
                                 } else if let Some(volume) = volumes.read().get(selected - 1) {
@@ -1090,6 +1124,17 @@ fn app() -> Element {
                                 page.set(Page::Libraries);
                             }
                             Page::Volumes => {
+                                let library_id = current_series_library_id(
+                                    &series.read(),
+                                    &libraries.read(),
+                                    libraries_selection(),
+                                );
+                                if let Some(library_id) = library_id {
+                                    match load_series(library_id) {
+                                        Ok(items) => series.set(items),
+                                        Err(err) => status.write().message = format!("Failed to refresh series: {err}"),
+                                    }
+                                }
                                 selected_index.set(series_selection());
                                 page.set(Page::Series);
                             }
@@ -1305,10 +1350,12 @@ fn app() -> Element {
                                                             onclick: move |_| {
                                                                 match load_volumes(id) {
                                                                     Ok(items) => {
+                                                                        let volume_selection = first_non_complete_volume_selection(&items);
                                                                         volumes.set(items);
                                                                         status.write().message = format!("Loaded volumes for series id {id}");
                                                                         series_selection.set(index + 1);
-                                                                        selected_index.set(0);
+                                                                        selected_index.set(volume_selection);
+                                                                        volumes_selection.set(volume_selection);
                                                                         page.set(Page::Volumes);
                                                                     }
                                                                     Err(err) => status.write().message = format!("Failed to load volumes: {err}"),
@@ -1363,10 +1410,12 @@ fn app() -> Element {
                                                             onclick: move |_| {
                                                                 match load_volumes(id) {
                                                                     Ok(items) => {
+                                                                        let volume_selection = first_non_complete_volume_selection(&items);
                                                                         volumes.set(items);
                                                                         status.write().message = format!("Loaded volumes for series id {id}");
                                                                         series_selection.set(nav_index);
-                                                                        selected_index.set(0);
+                                                                        selected_index.set(volume_selection);
+                                                                        volumes_selection.set(volume_selection);
                                                                         page.set(Page::Volumes);
                                                                     }
                                                                     Err(err) => status.write().message = format!("Failed to load volumes: {err}"),
@@ -1423,6 +1472,17 @@ fn app() -> Element {
                                             button {
                                                 class: if selected_snapshot == 0 { "back-card selected" } else { "back-card" },
                                                 onclick: move |_| {
+                                                    let library_id = current_series_library_id(
+                                                        &series.read(),
+                                                        &libraries.read(),
+                                                        libraries_selection(),
+                                                    );
+                                                    if let Some(library_id) = library_id {
+                                                        match load_series(library_id) {
+                                                            Ok(items) => series.set(items),
+                                                            Err(err) => status.write().message = format!("Failed to refresh series: {err}"),
+                                                        }
+                                                    }
                                                     selected_index.set(series_selection());
                                                     page.set(Page::Series);
                                                 },
