@@ -12,7 +12,7 @@ use tokio::time::{timeout, Duration};
 use crate::storage::Database;
 
 use serde_json::json as serde_json_json;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::thread;
 use tokio::sync::broadcast;
@@ -152,6 +152,8 @@ pub struct Kavita {
     pub api_key: String,
     // --- Caching fields ---
     pub caching_queue: Arc<StdMutex<VecDeque<i32>>>, // series_id queue
+    pub caching_current_series: Arc<StdMutex<Option<i32>>>,
+    pub caching_cancelled_series: Arc<StdMutex<HashSet<i32>>>,
     pub caching_thread_handle: Arc<StdMutex<Option<thread::JoinHandle<()>>>>,
     // --- WebSocket fields ---
     pub ws_sender: Option<Arc<broadcast::Sender<serde_json::Value>>>,
@@ -223,6 +225,8 @@ impl Kavita {
             ip: DEFAULT_IP.to_string(),
             api_key: DEFAULT_API_KEY.to_string(),
             caching_queue: Arc::new(StdMutex::new(VecDeque::new())),
+            caching_current_series: Arc::new(StdMutex::new(None)),
+            caching_cancelled_series: Arc::new(StdMutex::new(HashSet::new())),
             caching_thread_handle: Arc::new(StdMutex::new(None)),
             ws_sender: None,
         };
@@ -1193,6 +1197,10 @@ impl Kavita {
     // Add a series to the caching queue and start the thread if not running
     pub fn cache_serie(&self, series_id: i32) {
         {
+            let mut cancelled = self.caching_cancelled_series.lock().unwrap();
+            cancelled.remove(&series_id);
+        }
+        {
             let mut queue = self.caching_queue.lock().unwrap();
             if !queue.contains(&series_id) {
                 queue.push_back(series_id);
@@ -1202,14 +1210,51 @@ impl Kavita {
         if handle_guard.is_none() {
             let db = self.db.clone();
             let queue = self.caching_queue.clone();
+            let current_series = self.caching_current_series.clone();
+            let cancelled_series = self.caching_cancelled_series.clone();
             let ip = self.ip.clone();
             let api_key = self.api_key.clone();
             let token = self.token.clone();
             let ws_sender = self.ws_sender.clone();
             *handle_guard = Some(thread::spawn(move || {
-                cache_serie_threaded(db, queue, ip, api_key, token, ws_sender);
+                cache_serie_threaded(
+                    db,
+                    queue,
+                    current_series,
+                    cancelled_series,
+                    ip,
+                    api_key,
+                    token,
+                    ws_sender,
+                );
             }));
         }
+    }
+
+    pub fn is_series_caching(&self, series_id: i32) -> bool {
+        let is_current = self
+            .caching_current_series
+            .lock()
+            .unwrap()
+            .map(|current| current == series_id)
+            .unwrap_or(false);
+        if is_current {
+            return true;
+        }
+
+        self.caching_queue.lock().unwrap().contains(&series_id)
+    }
+
+    pub fn stop_cache_serie(&self, series_id: i32) {
+        {
+            let mut queue = self.caching_queue.lock().unwrap();
+            queue.retain(|&id| id != series_id);
+        }
+        {
+            let mut cancelled = self.caching_cancelled_series.lock().unwrap();
+            cancelled.insert(series_id);
+        }
+        info(&format!("Requested cache stop for series {}", series_id));
     }
 
     // Remove cached volumes for a series and remove from caching queue
@@ -1237,6 +1282,10 @@ impl Kavita {
             let mut queue = self.caching_queue.lock().unwrap();
             queue.retain(|&id| id != series_id);
         }
+        {
+            let mut cancelled = self.caching_cancelled_series.lock().unwrap();
+            cancelled.insert(series_id);
+        }
 
         info(&format!(
             "Removed cache for series {} ({} files)",
@@ -1251,6 +1300,8 @@ impl Kavita {
 fn cache_serie_threaded(
     db: Database,
     queue: Arc<StdMutex<VecDeque<i32>>>,
+    current_series: Arc<StdMutex<Option<i32>>>,
+    cancelled_series: Arc<StdMutex<HashSet<i32>>>,
     ip: String,
     api_key: String,
     _token: String,
@@ -1264,6 +1315,15 @@ fn cache_serie_threaded(
             q.pop_front()
         };
         if let Some(series_id) = series_id {
+            {
+                let mut current = current_series.lock().unwrap();
+                *current = Some(series_id);
+            }
+            {
+                let mut cancelled = cancelled_series.lock().unwrap();
+                cancelled.remove(&series_id);
+            }
+
             // Send caching start notification
             if let Some(sender) = &ws_sender {
                 let start_msg = serde_json_json!({
@@ -1285,8 +1345,13 @@ fn cache_serie_threaded(
 
             let total_volumes = volumes.len();
             let mut cached_volumes = 0;
+            let mut cancelled = false;
 
             for volume in volumes {
+                if cancelled_series.lock().unwrap().contains(&series_id) {
+                    cancelled = true;
+                    break;
+                }
                 if volume.pages > 0 && volume.read >= volume.pages {
                     continue; // Skip fully read volumes
                 }
@@ -1296,6 +1361,10 @@ fn cache_serie_threaded(
                 ));
                 if let Some((chapter_id, pages)) = db.get_volume_chapter_and_pages(volume.id) {
                     for page in 0..pages {
+                        if cancelled_series.lock().unwrap().contains(&series_id) {
+                            cancelled = true;
+                            break;
+                        }
                         if !db.is_picture_cached(chapter_id, page) {
                             let url = format!(
                                 "http://{}/api/reader/image?chapterId={}&apiKey={}&page={}",
@@ -1319,6 +1388,9 @@ fn cache_serie_threaded(
                             }
                         }
                     }
+                }
+                if cancelled {
+                    break;
                 }
                 info(&format!(
                     "Finished caching volume {} (title: {}) in series {}",
@@ -1345,11 +1417,26 @@ fn cache_serie_threaded(
                 }
             }
 
+            {
+                let mut current = current_series.lock().unwrap();
+                if *current == Some(series_id) {
+                    *current = None;
+                }
+            }
+            {
+                let mut cancelled_set = cancelled_series.lock().unwrap();
+                cancelled_set.remove(&series_id);
+            }
+
             // Send caching end notification
             if let Some(sender) = &ws_sender {
                 let end_msg = serde_json_json!({
-                    "event": "caching_end",
-                    "message": format!("Finished caching series {}", series_id),
+                    "event": if cancelled { "caching_cancelled" } else { "caching_end" },
+                    "message": if cancelled {
+                        format!("Stopped caching series {}", series_id)
+                    } else {
+                        format!("Finished caching series {}", series_id)
+                    },
                     "data": {
                         "series_id": series_id,
                         "volumes_cached": cached_volumes,

@@ -107,6 +107,48 @@ fn load_volumes(series_id: i32) -> Result<Vec<Volume>, String> {
     })
 }
 
+fn toggle_volume_read(volume: &Volume) -> Result<bool, String> {
+    tokio::runtime::Handle::current().block_on(async {
+        let kavita = kavita();
+        let kavita = kavita.lock().await;
+        let is_complete = volume.pages > 0 && volume.read >= volume.pages;
+        if is_complete {
+            kavita
+                .set_volume_as_unread(&volume.series_id, &volume.volume_id)
+                .await
+                .map_err(|err| err.to_string())?;
+        } else {
+            kavita
+                .set_volume_as_read(&volume.series_id, &volume.volume_id)
+                .await
+                .map_err(|err| err.to_string())?;
+        }
+        Ok(!is_complete)
+    })
+}
+
+fn toggle_series_caching(series_id: i32) -> Result<bool, String> {
+    tokio::runtime::Handle::current().block_on(async {
+        let kavita = kavita();
+        let kavita = kavita.lock().await;
+        if kavita.is_series_caching(series_id) {
+            kavita.stop_cache_serie(series_id);
+            Ok(false)
+        } else {
+            kavita.cache_serie(series_id);
+            Ok(true)
+        }
+    })
+}
+
+fn is_series_caching(series_id: i32) -> bool {
+    tokio::runtime::Handle::current().block_on(async {
+        let kavita = kavita();
+        let kavita = kavita.lock().await;
+        kavita.is_series_caching(series_id)
+    })
+}
+
 fn clear_cache() -> Result<(), String> {
     tokio::runtime::Handle::current().block_on(async {
         let kavita = kavita();
@@ -586,6 +628,30 @@ html, body, #main {
 }
 .series-card-title.cached {
   background: rgba(180, 83, 9, 0.88);
+}
+.series-card-title span {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.series-card.selected .series-card-title {
+  justify-content: flex-start;
+}
+.series-card.selected .series-card-title span {
+  max-width: none;
+  min-width: 100%;
+  overflow: visible;
+  text-overflow: clip;
+  animation: title-marquee 7s linear infinite;
+}
+@keyframes title-marquee {
+  0%, 18% {
+    transform: translateX(0);
+  }
+  82%, 100% {
+    transform: translateX(calc(-100% + 134px));
+  }
 }
 .library-card {
   position: relative;
@@ -1182,6 +1248,80 @@ fn app() -> Element {
                             },
                         }
                     }
+                    "F1" => {
+                        event.prevent_default();
+                        if page() == Page::Volumes {
+                            let selected = selected_index();
+                            if selected > 0 {
+                                let focused_volume = volumes.read().get(selected - 1).cloned();
+                                if let Some(volume) = focused_volume {
+                                    match toggle_volume_read(&volume) {
+                                        Ok(marked_read) => {
+                                            match load_volumes(volume.series_id) {
+                                                Ok(items) => {
+                                                    volumes.set(items);
+                                                    selected_index.set(selected);
+                                                    volumes_selection.set(selected);
+                                                }
+                                                Err(err) => status.write().message = format!("Failed to refresh volumes: {err}"),
+                                            }
+                                            status.write().message = if marked_read {
+                                                format!("Marked {} as read", volume.title)
+                                            } else {
+                                                format!("Marked {} as unread", volume.title)
+                                            };
+                                        }
+                                        Err(err) => status.write().message = format!("Failed to update volume: {err}"),
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    "F2" => {
+                        event.prevent_default();
+                        let current_series = match page() {
+                            Page::Series => {
+                                let series_snapshot = series.read();
+                                selected_series(&series_snapshot, selected_index())
+                                    .map(|item| (item.id, item.title.clone()))
+                            }
+                            Page::Volumes => {
+                                let volumes_snapshot = volumes.read();
+                                let selected = selected_index();
+                                let volume = if selected > 0 {
+                                    volumes_snapshot.get(selected - 1)
+                                } else {
+                                    volumes_snapshot.first()
+                                };
+                                volume.map(|item| (item.series_id, format!("series {}", item.series_id)))
+                            }
+                            Page::Reader => reader_volume
+                                .read()
+                                .as_ref()
+                                .map(|item| (item.series_id, format!("series {}", item.series_id))),
+                            Page::Dashboard | Page::Libraries | Page::Settings => None,
+                        };
+
+                        if let Some((series_id, title)) = current_series {
+                            if page() == Page::Series && !is_series_caching(series_id) {
+                                if let Err(err) = load_volumes(series_id) {
+                                    status.write().message = format!("Failed to prepare cache: {err}");
+                                    return;
+                                }
+                            }
+
+                            match toggle_series_caching(series_id) {
+                                Ok(started) => {
+                                    status.write().message = if started {
+                                        format!("Started caching {}", title)
+                                    } else {
+                                        format!("Stopped caching {}", title)
+                                    };
+                                }
+                                Err(err) => status.write().message = format!("Failed to toggle cache: {err}"),
+                            }
+                        }
+                    }
                     "Backspace" => {
                         event.prevent_default();
                         match page() {
@@ -1438,7 +1578,9 @@ fn app() -> Element {
                                                                     style: "width: {progress}%;"
                                                                 }
                                                             }
-                                                            div { class: "series-card-title", "{title}" }
+                                                            div { class: "series-card-title",
+                                                                span { "{title}" }
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -1498,7 +1640,9 @@ fn app() -> Element {
                                                                     style: "width: {progress}%;"
                                                                 }
                                                             }
-                                                            div { class: "series-card-title complete", "{title}" }
+                                                            div { class: "series-card-title complete",
+                                                                span { "{title}" }
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -1609,7 +1753,9 @@ fn app() -> Element {
                                                                 style: "width: {progress}%;"
                                                             }
                                                         }
-                                                        div { class: "{title_class}", "{title}" }
+                                                        div { class: "{title_class}",
+                                                            span { "{title}" }
+                                                        }
                                                     }
                                                 }
                                             }
