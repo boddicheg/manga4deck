@@ -478,13 +478,28 @@ html, body, #main {
   cursor: pointer;
   scroll-margin: 96px 32px 72px;
   box-shadow: 8px -8px 8px rgba(0,0,0,0.22), 3px -3px 4px rgba(0,0,0,0.16), inset 0 0 0 1px rgba(255,255,255,0.10);
+  transform: translateY(0) scale(1);
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
 }
 .series-card:focus,
-.series-card:hover,
+.series-card:hover {
+  outline: none;
+  border: 2px solid rgba(248,250,252,0.8);
+  box-shadow:
+    8px -8px 12px rgba(0,0,0,0.44),
+    3px -3px 6px rgba(0,0,0,0.34),
+    0 0 0 2px rgba(59,130,246,0.56);
+}
 .series-card.selected {
   outline: none;
-  border: 2px solid #111;
-  box-shadow: 8px -8px 12px rgba(0,0,0,0.44), 3px -3px 6px rgba(0,0,0,0.34), 0 0 0 2px rgba(59,130,246,0.65);
+  border: 2px solid #60a5fa;
+  transform: translateY(-6px) scale(1.04);
+  box-shadow:
+    10px -10px 18px rgba(0,0,0,0.54),
+    4px -4px 8px rgba(0,0,0,0.38),
+    0 0 0 3px rgba(96,165,250,0.95),
+    0 0 0 6px rgba(17,24,39,0.88),
+    0 0 24px rgba(56,189,248,0.64);
 }
 .series-progress {
   position: absolute;
