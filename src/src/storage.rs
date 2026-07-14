@@ -447,7 +447,9 @@ impl Database {
     pub fn is_series_fully_cached(&self, series_id: i32) -> bool {
         let conn = self.conn.lock().unwrap();
         let mut stmt = match conn.prepare(
-            "SELECT COALESCE(SUM(pages), 0) FROM volumes WHERE series_id = ? AND pages > 0",
+            "SELECT COALESCE(SUM(pages), 0)
+             FROM volumes
+             WHERE series_id = ? AND pages > 0 AND read < pages",
         ) {
             Ok(stmt) => stmt,
             Err(_) => return false,
@@ -463,7 +465,7 @@ impl Database {
             "SELECT COUNT(DISTINCT mp.chapter_id || ':' || mp.page)
              FROM manga_pictures mp
              INNER JOIN volumes v ON mp.chapter_id = v.chapter_id
-             WHERE v.series_id = ? AND v.pages > 0",
+             WHERE v.series_id = ? AND v.pages > 0 AND v.read < v.pages",
         ) {
             Ok(stmt) => stmt,
             Err(_) => return false,
@@ -591,5 +593,62 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM read_progress", [])?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn volume(id: i32, series_id: i32, chapter_id: i32, read: i32, pages: i32) -> Volume {
+        Volume {
+            id,
+            series_id,
+            chapter_id,
+            volume_id: id,
+            title: format!("Volume {id}"),
+            read,
+            pages,
+            is_cached: false,
+        }
+    }
+
+    fn cache_page(db: &Database, chapter_id: i32, page: i32) {
+        db.add_picture(&MangaPicture {
+            chapter_id,
+            page,
+            file: format!("cached-{chapter_id}-{page}.png"),
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn cached_series_ignores_completed_volumes_and_stays_scoped_to_its_series() {
+        let db = Database::new(&":memory:".to_string()).unwrap();
+
+        // Series 1 has one completed volume, which the cache worker skips, and
+        // one unread volume, which has been fully cached.
+        db.add_volume(&volume(11, 1, 101, 2, 2)).unwrap();
+        db.add_volume(&volume(12, 1, 102, 0, 2)).unwrap();
+        cache_page(&db, 102, 0);
+        cache_page(&db, 102, 1);
+
+        // A different series is only partially cached.
+        db.add_volume(&volume(21, 2, 201, 0, 2)).unwrap();
+        cache_page(&db, 201, 0);
+
+        assert!(db.is_series_fully_cached(1));
+        assert!(!db.is_series_fully_cached(2));
+
+        cache_page(&db, 201, 1);
+        assert!(db.is_series_fully_cached(2));
+    }
+
+    #[test]
+    fn series_with_no_unread_pages_is_not_an_offline_series() {
+        let db = Database::new(&":memory:".to_string()).unwrap();
+        db.add_volume(&volume(11, 1, 101, 2, 2)).unwrap();
+
+        assert!(!db.is_series_fully_cached(1));
     }
 }
