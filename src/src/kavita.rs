@@ -1192,7 +1192,8 @@ impl Kavita {
         Ok(())
     }
 
-    // Check if all volumes in a series are cached
+    // Check if every unread volume in a series is cached. The cache worker
+    // intentionally skips completed volumes.
     pub fn is_series_cached(&self, series_id: i32) -> bool {
         self.db.is_series_fully_cached(series_id)
     }
