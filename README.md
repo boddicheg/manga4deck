@@ -19,6 +19,7 @@ The app has a Rust backend and a native Manga4Deck UI focused on Steam Deck use.
 - Offline/cache-aware volume and series state
 - Cover thumbnails cached as small JPEGs for faster shelf loading
 - Reader with batch page loading
+- PDF books displayed as page images in the same scrolling reader, with progress and offline caching
 - Keyboard and Steam Deck controller friendly navigation
 
 ## Controls
@@ -92,6 +93,8 @@ cargo build --manifest-path src/Cargo.toml
 ## Kavita
 
 Manga4Deck expects access to a Kavita server. Server IP, username/password, and API key are stored by the app settings UI.
+
+PDF pages are rendered by Kavita using its reader image API (`extractPdf=true`) and cached locally like manga pages. Your Kavita version must support this option. The first page can take longer while the server renders the book. No local PDF renderer is needed. Cache a series before disconnecting to read its PDF pages offline.
 
 The local backend listens on:
 

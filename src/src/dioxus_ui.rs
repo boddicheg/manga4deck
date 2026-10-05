@@ -124,12 +124,12 @@ fn toggle_volume_read(volume: &Volume) -> Result<bool, String> {
         let is_complete = volume.pages > 0 && volume.read >= volume.pages;
         if is_complete {
             kavita
-                .set_volume_as_unread(&volume.series_id, &volume.volume_id)
+                .set_volume_as_unread(&volume.series_id, &volume.id)
                 .await
                 .map_err(|err| err.to_string())?;
         } else {
             kavita
-                .set_volume_as_read(&volume.series_id, &volume.volume_id)
+                .set_volume_as_read(&volume.series_id, &volume.id)
                 .await
                 .map_err(|err| err.to_string())?;
         }
@@ -2078,7 +2078,7 @@ fn app() -> Element {
                                             }
                                         }
                                         {volumes_snapshot.iter().enumerate().map(|(index, volume)| {
-                                            let cover_id = volume.volume_id;
+                                            let cover_id = volume.id;
                                             let title = volume.title.clone();
                                             let reader_item = volume.clone();
                                             let progress = if volume.pages > 0 {
@@ -2268,21 +2268,25 @@ fn app() -> Element {
                                 input {
                                     value: "{server_ip.read()}",
                                     placeholder: "Server IP",
+                                    onkeydown: move |event| event.stop_propagation(),
                                     oninput: move |event| server_ip.set(event.value()),
                                 }
                                 input {
                                     value: "{username.read()}",
                                     placeholder: "Username",
+                                    onkeydown: move |event| event.stop_propagation(),
                                     oninput: move |event| username.set(event.value()),
                                 }
                                 input {
                                     value: "{password.read()}",
                                     placeholder: "Password",
+                                    onkeydown: move |event| event.stop_propagation(),
                                     oninput: move |event| password.set(event.value()),
                                 }
                                 input {
                                     value: "{api_key.read()}",
                                     placeholder: "API Key",
+                                    onkeydown: move |event| event.stop_propagation(),
                                     oninput: move |event| api_key.set(event.value()),
                                 }
                                 button {
@@ -2328,11 +2332,12 @@ pub fn run_ui(kavita: SharedKavita) {
     #[cfg(target_os = "linux")]
     let window = window.with_decorations(false);
 
+    // macOS routes standard clipboard shortcuts through the native Edit menu.
+    let config = Config::new().with_window(window);
+    #[cfg(not(target_os = "macos"))]
+    let config = config.with_menu(None);
+
     dioxus::LaunchBuilder::desktop()
-        .with_cfg(
-            Config::new()
-                .with_window(window)
-                .with_menu(None),
-        )
+        .with_cfg(config)
         .launch(app);
 }
