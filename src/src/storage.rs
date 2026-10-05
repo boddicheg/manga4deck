@@ -308,6 +308,26 @@ impl Database {
         Ok(())
     }
 
+    /// Refresh shelf metadata atomically, including PDF books split into chapter entries.
+    /// Cached pictures and offline progress stay attached to their Kavita chapter IDs.
+    pub fn replace_volumes(
+        &self,
+        series_id: i32,
+        volumes: &[Volume],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut conn = self.conn.lock().unwrap();
+        let transaction = conn.transaction()?;
+        transaction.execute("DELETE FROM volumes WHERE series_id = ?", [series_id])?;
+        for volume in volumes {
+            transaction.execute(
+                "INSERT INTO volumes (id, series_id, chapter_id, volume_id, title, read, pages) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                rusqlite::params![volume.id, volume.series_id, volume.chapter_id, volume.volume_id, volume.title, volume.read, volume.pages],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn add_volume_cover(
         &self,
         volume_cover: &VolumeCover,
@@ -369,6 +389,15 @@ impl Database {
                     picture.file.to_string(),
                 ],
             )?;
+        } else {
+            conn.execute(
+                "UPDATE manga_pictures SET file = ? WHERE chapter_id = ? AND page = ?",
+                [
+                    picture.file.to_string(),
+                    picture.chapter_id.to_string(),
+                    picture.page.to_string(),
+                ],
+            )?;
         }
         Ok(())
     }
@@ -420,21 +449,22 @@ impl Database {
 
     pub fn is_volume_fully_cached(&self, volume_id: i32) -> bool {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = match conn.prepare(
-            "SELECT pages, chapter_id FROM volumes WHERE id = ? AND pages > 0",
-        ) {
+        let mut stmt = match conn
+            .prepare("SELECT pages, chapter_id FROM volumes WHERE id = ? AND pages > 0")
+        {
             Ok(stmt) => stmt,
             Err(_) => return false,
         };
-        let (pages, chapter_id): (i32, i32) =
-            match stmt.query_row([volume_id.to_string()], |row| Ok((row.get(0)?, row.get(1)?))) {
-                Ok(row) => row,
-                Err(_) => return false,
-            };
+        let (pages, chapter_id): (i32, i32) = match stmt.query_row([volume_id.to_string()], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        }) {
+            Ok(row) => row,
+            Err(_) => return false,
+        };
 
-        let mut stmt = match conn.prepare(
-            "SELECT COUNT(DISTINCT page) FROM manga_pictures WHERE chapter_id = ?",
-        ) {
+        let mut stmt = match conn
+            .prepare("SELECT COUNT(DISTINCT page) FROM manga_pictures WHERE chapter_id = ?")
+        {
             Ok(stmt) => stmt,
             Err(_) => return false,
         };
@@ -650,5 +680,27 @@ mod tests {
         db.add_volume(&volume(11, 1, 101, 2, 2)).unwrap();
 
         assert!(!db.is_series_fully_cached(1));
+    }
+
+    #[test]
+    fn refreshing_pdf_metadata_replaces_aggregate_volumes_and_preserves_page_cache() {
+        let db = Database::new(&":memory:".to_string()).unwrap();
+        db.add_volume(&volume(11, 1, 101, 0, 2)).unwrap();
+        db.add_volume(&volume(21, 2, 201, 0, 1)).unwrap();
+        cache_page(&db, 101, 0);
+        let mut book = volume(-101, 1, 101, 0, 2);
+        book.volume_id = 11;
+        db.replace_volumes(1, &[book.clone()]).unwrap();
+        assert!(db.get_volume_by_id(11).unwrap().is_none());
+        assert_eq!(db.get_volume_by_id(-101).unwrap().unwrap().volume_id, 11);
+        assert!(db.get_volume_by_id(21).unwrap().is_some());
+        assert!(db.is_picture_cached(101, 0));
+        assert!(!db.is_volume_fully_cached(-101));
+        cache_page(&db, 101, 1);
+        assert!(db.is_volume_fully_cached(-101));
+        assert!(db.is_series_fully_cached(1));
+        // Invalid replacement data must roll back instead of losing the existing shelf.
+        assert!(db.replace_volumes(1, &[book.clone(), book]).is_err());
+        assert_eq!(db.get_volumes(&1).unwrap().len(), 1);
     }
 }

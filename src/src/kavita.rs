@@ -17,6 +17,171 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::thread;
 use tokio::sync::broadcast;
 
+/// Request rasterized pages for PDFs; Kavita uses the same endpoint for archives/images.
+fn reader_image_url(
+    ip: &str,
+    api_key: &str,
+    chapter_id: i32,
+    page: i32,
+) -> Result<reqwest::Url, Box<dyn std::error::Error>> {
+    if chapter_id <= 0 || page < 0 {
+        return Err("Invalid chapter or page index".into());
+    }
+    let mut url = reqwest::Url::parse(&format!("http://{ip}/api/reader/image"))?;
+    url.query_pairs_mut()
+        .append_pair("chapterId", &chapter_id.to_string())
+        .append_pair("apiKey", api_key)
+        .append_pair("page", &page.to_string())
+        .append_pair("extractPdf", "true");
+    Ok(url)
+}
+
+fn reader_image_extension(bytes: &[u8]) -> Result<&'static str, Box<dyn std::error::Error>> {
+    let format =
+        image::guess_format(bytes).map_err(|_| "Kavita did not return a rendered page image")?;
+    let extension = match format {
+        image::ImageFormat::Png => "png",
+        image::ImageFormat::Jpeg => "jpg",
+        image::ImageFormat::WebP => "webp",
+        _ => return Err("Unsupported reader image format".into()),
+    };
+    // Check the image header without decoding a whole full-resolution page.
+    image::ImageReader::with_format(std::io::Cursor::new(bytes), format).into_dimensions()?;
+    Ok(extension)
+}
+
+fn cached_reader_picture(db: &Database, chapter_id: i32, page: i32) -> Option<String> {
+    let file = db.get_picture(&chapter_id, &page).ok()?;
+    let reader = image::ImageReader::open(&file)
+        .ok()?
+        .with_guessed_format()
+        .ok()?;
+    reader.into_dimensions().ok()?;
+    Some(file)
+}
+
+fn cache_reader_picture(
+    db: &Database,
+    folder: &Path,
+    chapter_id: i32,
+    page: i32,
+    bytes: &[u8],
+) -> Result<String, Box<dyn std::error::Error>> {
+    let extension = reader_image_extension(bytes)?;
+    let filename = folder.join(format!("{}.{extension}", generate_hash_from_now()));
+    fs::write(&filename, bytes)?;
+    let file = filename.to_string_lossy().into_owned();
+    let previous = db.get_picture(&chapter_id, &page).ok();
+    if let Err(err) = db.add_picture(&MangaPicture {
+        chapter_id,
+        page,
+        file: file.clone(),
+    }) {
+        let _ = fs::remove_file(filename);
+        return Err(err);
+    }
+    if let Some(previous) = previous.filter(|previous| previous != &file) {
+        let _ = fs::remove_file(previous);
+    }
+    Ok(file)
+}
+
+fn is_pdf_chapter(chapter: &serde_json::Value) -> bool {
+    let is_pdf = |format: &serde_json::Value| {
+        format.as_i64() == Some(4)
+            || format
+                .as_str()
+                .is_some_and(|value| value.eq_ignore_ascii_case("pdf"))
+    };
+    is_pdf(&chapter["format"])
+        || chapter["files"]
+            .as_array()
+            .is_some_and(|files| files.iter().any(|file| is_pdf(&file["format"])))
+}
+
+fn pdf_volume(series_id: i32, chapter: &serde_json::Value, parent_id: i32) -> Option<Volume> {
+    let chapter_id = chapter["id"].as_i64()? as i32;
+    let volume_id = chapter["volumeId"].as_i64().unwrap_or(parent_id as i64) as i32;
+    if chapter_id <= 0 || volume_id <= 0 {
+        return None;
+    }
+    let title = ["titleName", "title", "range"]
+        .iter()
+        .find_map(|key| chapter[*key].as_str().filter(|title| !title.is_empty()))
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("Book {chapter_id}"));
+    Some(Volume {
+        // Negative local IDs distinguish individual books from real Kavita volumes.
+        // Keep the real parent volume ID for progress uploads.
+        id: -chapter_id,
+        series_id,
+        chapter_id,
+        volume_id,
+        title,
+        read: chapter["pagesRead"].as_i64().unwrap_or(0) as i32,
+        pages: chapter["pages"].as_i64().unwrap_or(0) as i32,
+        is_cached: false,
+    })
+}
+
+fn reader_volumes(series_id: i32, data: &serde_json::Value) -> Vec<Volume> {
+    let array = |key: &str| data[key].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let mut result = Vec::new();
+    let mut seen = HashSet::new();
+    let top_level_chapter_id = array("chapters")
+        .first()
+        .and_then(|c| c["id"].as_i64())
+        .unwrap_or(0) as i32;
+    for v in array("volumes") {
+        let volume_id = v["id"].as_i64().unwrap_or(0) as i32;
+        let chapters = v["chapters"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+        // A volume can group several PDF books. Give each its own page count and progress.
+        if !chapters.is_empty() && chapters.iter().all(is_pdf_chapter) {
+            for chapter in chapters {
+                if let Some(book) = pdf_volume(series_id, chapter, volume_id) {
+                    if seen.insert(book.chapter_id) {
+                        result.push(book);
+                    }
+                }
+            }
+            continue;
+        }
+        let chapter_id = chapters
+            .first()
+            .and_then(|c| c["id"].as_i64())
+            .unwrap_or(top_level_chapter_id as i64) as i32;
+        if chapter_id <= 0 || volume_id <= 0 {
+            continue;
+        }
+        seen.extend(
+            chapters
+                .iter()
+                .filter_map(|c| c["id"].as_i64().map(|id| id as i32)),
+        );
+        seen.insert(chapter_id);
+        result.push(Volume {
+            id: volume_id,
+            series_id,
+            chapter_id,
+            volume_id,
+            title: v["name"].as_str().unwrap_or("").to_string(),
+            read: v["pagesRead"].as_i64().unwrap_or(0) as i32,
+            pages: v["pages"].as_i64().unwrap_or(0) as i32,
+            is_cached: false,
+        });
+    }
+    for key in ["chapters", "specials", "storylineChapters"] {
+        for chapter in array(key).iter().filter(|chapter| is_pdf_chapter(chapter)) {
+            if let Some(book) = pdf_volume(series_id, chapter, 0) {
+                if seen.insert(book.chapter_id) {
+                    result.push(book);
+                }
+            }
+        }
+    }
+    result
+}
+
 fn get_datadir() -> PathBuf {
     let home = dirs::home_dir().expect("Could not find home directory");
 
@@ -104,9 +269,11 @@ pub fn generate_hash_from_now() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_millis();
+        .as_nanos();
     let mut hasher = Md5::new();
-    hasher.update(format!("{}", now));
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    hasher.update(format!("{now}-{sequence}"));
     let hash = hasher.finalize();
     format!("{:x}", hash)
 }
@@ -168,6 +335,7 @@ pub struct SeriesCover {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Volume {
+    /// Kavita volume ID, or a negative chapter ID for an individual PDF book.
     pub id: i32,
     pub series_id: i32,
     pub chapter_id: i32,
@@ -648,51 +816,13 @@ impl Kavita {
 
         let data: serde_json::Value = serde_json::from_str(&body)?;
 
-        let top_level_chapter_id = data["chapters"]
-            .as_array()
-            .and_then(|arr| arr.first())
-            .and_then(|c| c["id"].as_i64())
-            .unwrap_or(0) as i32;
-
-        let mut inserted = 0usize;
-        let volumes_arr = data["volumes"]
-            .as_array()
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
-        for v in volumes_arr {
-            let chapter_id = v["chapters"]
-                .as_array()
-                .and_then(|arr| arr.first())
-                .and_then(|c| c["id"].as_i64())
-                .unwrap_or(top_level_chapter_id as i64) as i32;
-
-            // If we can't resolve a chapter id, this volume isn't readable anyway.
-            if chapter_id <= 0 {
-                continue;
-            }
-
-            let volume = Volume {
-                id: v["id"].as_i64().unwrap_or(0) as i32,
-                series_id: series_id.clone(),
-                chapter_id,
-                volume_id: v["id"].as_i64().unwrap_or(0) as i32,
-                title: v["name"].as_str().unwrap_or("").to_string(),
-                read: v["pagesRead"].as_i64().unwrap_or(0) as i32,
-                pages: v["pages"].as_i64().unwrap_or(0) as i32,
-                is_cached: false,
-            };
-            self.db.add_volume(&volume)?;
-            inserted += 1;
-        }
-
-        if inserted == 0 {
+        let volumes = reader_volumes(*series_id, &data);
+        if volumes.is_empty() {
             info(&format!(
-                "pull_volumes(series_id={}) inserted 0 volumes (volumes_json_len={}, top_level_chapter_id={})",
-                series_id,
-                volumes_arr.len(),
-                top_level_chapter_id
+                "pull_volumes(series_id={series_id}) returned no readable volumes"
             ));
         }
+        self.db.replace_volumes(*series_id, &volumes)?;
         Ok(())
     }
 
@@ -814,12 +944,30 @@ impl Kavita {
             return Err("Volume cover not available offline".into());
         }
 
-        let url = format!(
-            "http://{}/api/image/volume-cover?volumeId={}&apiKey={}",
-            self.ip, volume_id, self.api_key
-        );
+        let url = if *volume_id < 0 {
+            let book = self
+                .db
+                .get_volume_by_id(*volume_id)?
+                .ok_or("Unknown PDF book")?;
+            format!(
+                "http://{}/api/image/chapter-cover?chapterId={}&apiKey={}",
+                self.ip, book.chapter_id, self.api_key
+            )
+        } else {
+            format!(
+                "http://{}/api/image/volume-cover?volumeId={}&apiKey={}",
+                self.ip, volume_id, self.api_key
+            )
+        };
         let client = reqwest::Client::new();
-        let response = client.get(url).header("Accept", "image/*").send().await?;
+        let response = client
+            .get(url)
+            .bearer_auth(&self.token)
+            .header("Accept", "image/*")
+            .send()
+            .await?
+            .error_for_status()
+            .map_err(reqwest::Error::without_url)?;
 
         let content_type = response
             .headers()
@@ -859,33 +1007,37 @@ impl Kavita {
         chapter_id: &i32,
         page: &i32,
     ) -> Result<String, Box<dyn std::error::Error>> {
-        if !self.offline_mode {
-            let url = format!(
-                "http://{}/api/reader/image?chapterId={}&apiKey={}&page={}",
-                self.ip, chapter_id, self.api_key, page
-            );
-            let client = reqwest::Client::new();
-            let response = client
-                .get(url)
-                .header("Content-Type", "image/png")
-                .send()
-                .await?;
-            let body = response.bytes().await?;
-            let hash = generate_hash_from_now();
-            let cache_folder = get_datadir().join("manga4deck-cache").join("cache");
-            let filename = cache_folder.join(format!("{}.png", hash));
-            fs::write(&filename, body)?;
+        self.get_picture_in_folder(*chapter_id, *page, &cache_folder_path())
+            .await
+    }
 
-            let picture = MangaPicture {
-                chapter_id: *chapter_id,
-                page: *page,
-                file: filename.to_string_lossy().into_owned(),
-            };
-            self.db.add_picture(&picture)?;
+    async fn get_picture_in_folder(
+        &self,
+        chapter_id: i32,
+        page: i32,
+        folder: &Path,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        if chapter_id <= 0 || page < 0 {
+            return Err("Invalid chapter or page index".into());
         }
-
-        let picture = self.db.get_picture(chapter_id, page)?;
-        Ok(picture)
+        if let Some(file) = cached_reader_picture(&self.db, chapter_id, page) {
+            return Ok(file);
+        }
+        if self.offline_mode {
+            return Err("Page is not available in the offline cache".into());
+        }
+        let url = reader_image_url(&self.ip, &self.api_key, chapter_id, page)?;
+        let response = reqwest::Client::new()
+            .get(url)
+            .bearer_auth(&self.token)
+            .header(header::ACCEPT, "image/*")
+            .send()
+            .await
+            .map_err(reqwest::Error::without_url)?
+            .error_for_status()
+            .map_err(reqwest::Error::without_url)?;
+        let body = response.bytes().await?;
+        cache_reader_picture(&self.db, folder, chapter_id, page, &body)
     }
     // -------------------------------------------------------------------------
     // Read Progress methods
@@ -927,7 +1079,15 @@ impl Kavita {
                 progress.series_id, progress.volume_id, progress.chapter_id, progress.page, page_num));
             self.db.add_read_progress(progress)?;
             // Update volume read pages in offline mode
-            if let Ok(Some(mut volume)) = self.db.get_volume_by_id(progress.volume_id) {
+            if let Some(mut volume) =
+                self.db
+                    .get_volumes(&progress.series_id)?
+                    .into_iter()
+                    .find(|volume| {
+                        volume.chapter_id == progress.chapter_id
+                            && volume.volume_id == progress.volume_id
+                    })
+            {
                 // Align with Kavita `pagesRead` (same as online `pageNum`)
                 volume.read = if volume.pages > 0 {
                     page_num.min(volume.pages)
@@ -1159,18 +1319,8 @@ impl Kavita {
         series_id: &i32,
         volume_id: &i32,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let url = format!("http://{}/api/reader/mark-volume-read", self.ip);
-        let client = reqwest::Client::new();
-        let _ = client
-            .post(url)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .json(&json!({
-                "seriesId": series_id,
-                "volumeId": volume_id,
-            }))
-            .send()
-            .await?;
-        Ok(())
+        self.set_reader_item_read(*series_id, *volume_id, true)
+            .await
     }
 
     pub async fn set_volume_as_unread(
@@ -1178,17 +1328,45 @@ impl Kavita {
         series_id: &i32,
         volume_id: &i32,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let url = format!("http://{}/api/reader/mark-volume-unread", self.ip);
-        let client = reqwest::Client::new();
-        let _ = client
-            .post(url)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .json(&json!({
-                "seriesId": series_id,
-                "volumeId": volume_id,
-            }))
+        self.set_reader_item_read(*series_id, *volume_id, false)
+            .await
+    }
+
+    async fn set_reader_item_read(
+        &self,
+        series_id: i32,
+        local_id: i32,
+        read: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let action = if read { "read" } else { "unread" };
+        let (endpoint, payload) = if local_id < 0 {
+            let book = self
+                .db
+                .get_volume_by_id(local_id)?
+                .ok_or("Unknown PDF book")?;
+            if book.series_id != series_id {
+                return Err("Book does not belong to this series".into());
+            }
+            (
+                format!("mark-multiple-{action}"),
+                json!({
+                    "seriesId": series_id, "volumeIds": [], "chapterIds": [book.chapter_id]
+                }),
+            )
+        } else {
+            (
+                format!("mark-volume-{action}"),
+                json!({"seriesId": series_id, "volumeId": local_id}),
+            )
+        };
+        reqwest::Client::new()
+            .post(format!("http://{}/api/reader/{endpoint}", self.ip))
+            .bearer_auth(&self.token)
+            .json(&payload)
             .send()
-            .await?;
+            .await?
+            .error_for_status()
+            .map_err(reqwest::Error::without_url)?;
         Ok(())
     }
 
@@ -1313,7 +1491,7 @@ fn cache_serie_threaded(
     cancelled_series: Arc<StdMutex<HashSet<i32>>>,
     ip: String,
     api_key: String,
-    _token: String,
+    token: String,
     ws_sender: Option<Arc<broadcast::Sender<serde_json::Value>>>,
 ) {
     use std::io::Read;
@@ -1389,32 +1567,39 @@ fn cache_serie_threaded(
                             cancelled = true;
                             break;
                         }
-                        if !db.is_picture_cached(chapter_id, page) {
-                            let url = format!(
-                                "http://{}/api/reader/image?chapterId={}&apiKey={}&page={}",
-                                ip, chapter_id, api_key, page
-                            );
-                            let resp = ureq::get(&url).call();
-                            if let Ok(response) = resp {
+                        if cached_reader_picture(&db, chapter_id, page).is_none() {
+                            let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                                let url = reader_image_url(&ip, &api_key, chapter_id, page)?;
+                                let response = ureq::get(url.as_str())
+                                    .set("Authorization", &format!("Bearer {token}"))
+                                    .set("Accept", "image/*")
+                                    .call()
+                                    .map_err(|_| "Kavita page request failed")?;
                                 let mut bytes = Vec::new();
-                                response.into_reader().read_to_end(&mut bytes).unwrap();
-                                let hash = generate_hash_from_now();
-                                let cache_folder =
-                                    get_datadir().join("manga4deck-cache").join("cache");
-                                let filename = cache_folder.join(format!("{}.png", hash));
-                                fs::write(&filename, &bytes).unwrap();
-                                let picture = crate::kavita::MangaPicture {
+                                response.into_reader().read_to_end(&mut bytes)?;
+                                cache_reader_picture(
+                                    &db,
+                                    &cache_folder_path(),
                                     chapter_id,
                                     page,
-                                    file: filename.to_string_lossy().into_owned(),
-                                };
-                                db.add_picture(&picture).unwrap();
+                                    &bytes,
+                                )?;
+                                Ok(())
+                            })();
+                            if let Err(err) = result {
+                                info(&format!(
+                                    "Failed to cache chapter {chapter_id}, page {page}: {err}"
+                                ));
                             }
                         }
                     }
                 }
                 if cancelled {
                     break;
+                }
+                if !db.is_volume_fully_cached(volume.id) {
+                    info(&format!("Volume {} is only partially cached", volume.id));
+                    continue;
                 }
                 info(&format!(
                     "Finished caching volume {} (title: {}) in series {}",
@@ -1474,6 +1659,285 @@ fn cache_serie_threaded(
             }
         } else {
             std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestCache(PathBuf);
+    impl TestCache {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("manga4deck-test-{}", generate_hash_from_now()));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for TestCache {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn test_kavita() -> Kavita {
+        Kavita {
+            db: Database::new(&":memory:".to_string()).unwrap(),
+            token: "test-token".into(),
+            logged_as: String::new(),
+            kavita_version: None,
+            offline_mode: false,
+            ip: "127.0.0.1:1".into(),
+            api_key: "key+&=".into(),
+            caching_queue: Arc::new(StdMutex::new(VecDeque::new())),
+            caching_current_series: Arc::new(StdMutex::new(None)),
+            caching_cancelled_series: Arc::new(StdMutex::new(HashSet::new())),
+            caching_thread_handle: Arc::new(StdMutex::new(None)),
+            ws_sender: None,
+        }
+    }
+
+    fn page_image(format: image::ImageFormat) -> Vec<u8> {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(2, 3)
+            .write_to(&mut bytes, format)
+            .unwrap();
+        bytes.into_inner()
+    }
+
+    async fn mock_page(status: u16, body: Vec<u8>) -> (String, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let mut buffer = [0; 1024];
+                let count = socket.read(&mut buffer).await.unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&buffer[..count]);
+            }
+            let header_end = request
+                .windows(4)
+                .position(|bytes| bytes == b"\r\n\r\n")
+                .unwrap()
+                + 4;
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let body_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            while request.len() < header_end + body_length {
+                let mut buffer = [0; 1024];
+                let count = socket.read(&mut buffer).await.unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&buffer[..count]);
+            }
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            socket.write_all(&body).await.unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        (address, task)
+    }
+
+    #[tokio::test]
+    async fn rendered_pdf_page_is_cached_with_its_format_and_reads_offline() {
+        let cache = TestCache::new();
+        let mut kavita = test_kavita();
+        let bytes = page_image(image::ImageFormat::Jpeg);
+        let (address, request) = mock_page(200, bytes.clone()).await;
+        kavita.ip = address;
+        let file = kavita
+            .get_picture_in_folder(101, 2, &cache.0)
+            .await
+            .unwrap();
+        let request = request.await.unwrap();
+        assert!(request.starts_with("GET /api/reader/image?"));
+        assert!(request.contains("chapterId=101"));
+        assert!(request.contains("page=2"));
+        assert!(request.contains("extractPdf=true"));
+        assert!(request.contains("apiKey=key%2B%26%3D"));
+        assert!(request.contains("authorization: Bearer test-token"));
+        assert!(file.ends_with(".jpg"));
+        assert_eq!(fs::read(&file).unwrap(), bytes);
+        // No server is listening any more: a cached page also works online.
+        assert_eq!(
+            kavita
+                .get_picture_in_folder(101, 2, &cache.0)
+                .await
+                .unwrap(),
+            file
+        );
+        kavita.offline_mode = true;
+        assert_eq!(
+            kavita
+                .get_picture_in_folder(101, 2, &cache.0)
+                .await
+                .unwrap(),
+            file
+        );
+        assert!(kavita
+            .get_picture_in_folder(101, 0, &cache.0)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn failed_or_unrendered_responses_do_not_enter_the_cache() {
+        let cache = TestCache::new();
+        let mut kavita = test_kavita();
+        for (status, body) in [
+            (500, page_image(image::ImageFormat::Png)),
+            (200, b"%PDF-1.7".to_vec()),
+            (200, b"<html>Error</html>".to_vec()),
+            (204, Vec::new()),
+        ] {
+            let (address, request) = mock_page(status, body).await;
+            kavita.ip = address;
+            assert!(kavita
+                .get_picture_in_folder(101, 0, &cache.0)
+                .await
+                .is_err());
+            request.await.unwrap();
+            assert!(kavita.db.get_picture(&101, &0).is_err());
+            assert_eq!(fs::read_dir(&cache.0).unwrap().count(), 0);
+        }
+    }
+
+    #[test]
+    fn bad_cached_pages_can_be_replaced_and_missing_files_are_not_reused() {
+        let cache = TestCache::new();
+        let db = test_kavita().db;
+        let invalid = cache.0.join("bad.png");
+        fs::write(&invalid, b"%PDF-1.7").unwrap();
+        db.add_picture(&MangaPicture {
+            chapter_id: 101,
+            page: 0,
+            file: invalid.to_string_lossy().into_owned(),
+        })
+        .unwrap();
+        assert!(cached_reader_picture(&db, 101, 0).is_none());
+        let file =
+            cache_reader_picture(&db, &cache.0, 101, 0, &page_image(image::ImageFormat::Png))
+                .unwrap();
+        assert_eq!(cached_reader_picture(&db, 101, 0), Some(file.clone()));
+        assert!(!invalid.exists());
+        fs::remove_file(file).unwrap();
+        assert!(cached_reader_picture(&db, 101, 0).is_none());
+        assert!(reader_image_url("localhost:5000", "key", 101, -1).is_err());
+        assert!(reader_image_url("localhost:5000", "key", 0, 0).is_err());
+    }
+
+    #[test]
+    fn pdf_books_are_individual_entries_and_duplicate_chapters_are_skipped() {
+        let first = json!({"id": 101, "volumeId": 11, "format": 4, "titleName": "Book One", "pages": 3, "pagesRead": 1});
+        let second = json!({"id": 102, "volumeId": 11, "files": [{"format": 4}], "title": "Book Two", "pages": 2});
+        let special = json!({"id": 103, "volumeId": 12, "format": "Pdf", "title": "Standalone PDF", "pages": 4});
+        let volumes = reader_volumes(
+            1,
+            &json!({
+                "volumes": [{"id": 11, "name": "Grouped books", "pages": 5, "chapters": [first, second]}],
+                "chapters": [first], "specials": [special], "storylineChapters": [special],
+            }),
+        );
+        assert_eq!(volumes.len(), 3);
+        assert_eq!(
+            (
+                volumes[0].id,
+                volumes[0].volume_id,
+                volumes[0].pages,
+                volumes[0].read
+            ),
+            (-101, 11, 3, 1)
+        );
+        assert_eq!(volumes[0].title, "Book One");
+        assert_eq!((volumes[1].id, volumes[1].pages), (-102, 2));
+        assert_eq!((volumes[2].chapter_id, volumes[2].volume_id), (103, 12));
+        let manga = reader_volumes(
+            1,
+            &json!({"volumes": [{"id": 20, "name": "Volume 1", "pages": 10, "chapters": [{"id": 200, "format": 1}]}]}),
+        );
+        assert_eq!(
+            (manga[0].id, manga[0].chapter_id, manga[0].pages),
+            (20, 200, 10)
+        );
+    }
+
+    #[tokio::test]
+    async fn offline_pdf_progress_updates_only_the_selected_book_and_keeps_server_ids() {
+        let mut kavita = test_kavita();
+        kavita.offline_mode = true;
+        let volumes = reader_volumes(
+            1,
+            &json!({"specials": [
+                {"id": 101, "volumeId": 11, "format": 4, "pages": 3},
+                {"id": 102, "volumeId": 11, "format": 4, "pages": 2},
+            ]}),
+        );
+        kavita.db.replace_volumes(1, &volumes).unwrap();
+        kavita
+            .save_progress(&ReadProgress {
+                id: None,
+                library_id: 1,
+                series_id: 1,
+                volume_id: 11,
+                chapter_id: 101,
+                page: 2,
+            })
+            .await
+            .unwrap();
+        assert_eq!(kavita.db.get_volume_by_id(-101).unwrap().unwrap().read, 3);
+        assert_eq!(kavita.db.get_volume_by_id(-102).unwrap().unwrap().read, 0);
+        let progress = kavita.db.get_all_read_progress().unwrap();
+        assert_eq!(
+            (
+                progress[0].volume_id,
+                progress[0].chapter_id,
+                progress[0].page
+            ),
+            (11, 101, 2)
+        );
+    }
+    #[tokio::test]
+    async fn pdf_read_actions_target_the_book_chapter() {
+        let mut kavita = test_kavita();
+        let books = reader_volumes(
+            1,
+            &json!({"specials": [
+                {"id": 101, "volumeId": 11, "format": 4, "pages": 3},
+                {"id": 102, "volumeId": 11, "format": 4, "pages": 2},
+            ]}),
+        );
+        kavita.db.replace_volumes(1, &books).unwrap();
+        for read in [true, false] {
+            let (address, request) = mock_page(200, Vec::new()).await;
+            kavita.ip = address;
+            kavita.set_reader_item_read(1, -101, read).await.unwrap();
+            let request = request.await.unwrap();
+            let action = if read { "read" } else { "unread" };
+            assert!(request.starts_with(&format!("POST /api/reader/mark-multiple-{action} ")));
+            let payload: serde_json::Value =
+                serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert_eq!(
+                payload,
+                json!({"seriesId": 1, "volumeIds": [], "chapterIds": [101]})
+            );
         }
     }
 }

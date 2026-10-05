@@ -676,7 +676,7 @@ fn main() {
 }
 
 fn run_frontend() {
-    info("🚀 Manga4Deck v0.6.6 - Starting Manga4Deck native UI...");
+    info(concat!("🚀 Manga4Deck v", env!("CARGO_PKG_VERSION"), " - Starting Manga4Deck native UI..."));
 
     let runtime = tokio::runtime::Runtime::new().expect("failed to create native UI tokio runtime");
     let _runtime_guard = runtime.enter();
