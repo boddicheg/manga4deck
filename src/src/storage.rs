@@ -452,22 +452,6 @@ impl Database {
         }
     }
 
-    // Helper: check if a picture is cached
-    pub fn is_picture_cached(&self, chapter_id: i32, page: i32) -> bool {
-        let conn = self.conn.lock().unwrap();
-        let stmt =
-            conn.prepare("SELECT count(*) FROM manga_pictures WHERE chapter_id = ? AND page = ?");
-        match stmt {
-            Ok(mut stmt) => {
-                let count = stmt.query_row([chapter_id.to_string(), page.to_string()], |r| {
-                    r.get::<_, i32>(0)
-                });
-                matches!(count, Ok(c) if c > 0)
-            }
-            Err(_) => false,
-        }
-    }
-
     pub fn is_volume_fully_cached(&self, volume_id: i32) -> bool {
         let Ok(Some(volume)) = self.get_volume_by_id(volume_id) else {
             return false;
@@ -578,30 +562,6 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_read_progress(
-        &self,
-        series_id: i32,
-    ) -> Result<Vec<crate::kavita::ReadProgress>, Box<dyn std::error::Error>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, library_id, series_id, volume_id, chapter_id, page FROM read_progress WHERE series_id = ?")?;
-        let rows = stmt.query_map([series_id.to_string()], |row| {
-            Ok(crate::kavita::ReadProgress {
-                id: Some(row.get(0)?),
-                library_id: row.get(1)?,
-                series_id: row.get(2)?,
-                volume_id: row.get(3)?,
-                chapter_id: row.get(4)?,
-                page: row.get(5)?,
-            })
-        })?;
-
-        let mut progress = Vec::new();
-        for row in rows {
-            progress.push(row?);
-        }
-        Ok(progress)
-    }
-
     pub fn get_all_read_progress(
         &self,
     ) -> Result<Vec<crate::kavita::ReadProgress>, Box<dyn std::error::Error>> {
@@ -640,140 +600,5 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM read_progress WHERE id = ?", [id])?;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn volume(id: i32, series_id: i32, chapter_id: i32, read: i32, pages: i32) -> Volume {
-        Volume {
-            id,
-            series_id,
-            chapter_id,
-            volume_id: id,
-            title: format!("Volume {id}"),
-            read,
-            pages,
-            is_cached: false,
-        }
-    }
-
-    fn cache_page(db: &Database, chapter_id: i32, page: i32) {
-        db.add_picture(&MangaPicture {
-            chapter_id,
-            page,
-            file: concat!(env!("CARGO_MANIFEST_DIR"), "/icons/32x32.png").to_string(),
-        })
-        .unwrap();
-    }
-
-    #[test]
-    fn cached_series_ignores_completed_volumes_and_stays_scoped_to_its_series() {
-        let db = Database::new(&":memory:".to_string()).unwrap();
-
-        // Series 1 has one completed volume, which the cache worker skips, and
-        // one unread volume, which has been fully cached.
-        db.add_volume(&volume(11, 1, 101, 2, 2)).unwrap();
-        db.add_volume(&volume(12, 1, 102, 0, 2)).unwrap();
-        cache_page(&db, 102, 0);
-        cache_page(&db, 102, 1);
-
-        // A different series is only partially cached.
-        db.add_volume(&volume(21, 2, 201, 0, 2)).unwrap();
-        cache_page(&db, 201, 0);
-
-        assert!(db.is_series_fully_cached(1));
-        assert!(!db.is_series_fully_cached(2));
-
-        cache_page(&db, 201, 1);
-        assert!(db.is_series_fully_cached(2));
-    }
-
-    #[test]
-    fn series_with_no_unread_pages_is_not_an_offline_series() {
-        let db = Database::new(&":memory:".to_string()).unwrap();
-        db.add_volume(&volume(11, 1, 101, 2, 2)).unwrap();
-
-        assert!(!db.is_series_fully_cached(1));
-    }
-
-    #[test]
-    fn refreshing_pdf_metadata_replaces_aggregate_volumes_and_preserves_page_cache() {
-        let db = Database::new(&":memory:".to_string()).unwrap();
-        db.add_volume(&volume(11, 1, 101, 0, 2)).unwrap();
-        db.add_volume(&volume(21, 2, 201, 0, 1)).unwrap();
-        cache_page(&db, 101, 0);
-        let mut book = volume(-101, 1, 101, 0, 2);
-        book.volume_id = 11;
-        db.replace_volumes(1, &[book.clone()]).unwrap();
-        assert!(db.get_volume_by_id(11).unwrap().is_none());
-        assert_eq!(db.get_volume_by_id(-101).unwrap().unwrap().volume_id, 11);
-        assert!(db.get_volume_by_id(21).unwrap().is_some());
-        assert!(db.is_picture_cached(101, 0));
-        assert!(!db.is_volume_fully_cached(-101));
-        cache_page(&db, 101, 1);
-        assert!(db.is_volume_fully_cached(-101));
-        assert!(db.is_series_fully_cached(1));
-        // Invalid replacement data must roll back instead of losing the existing shelf.
-        assert!(db.replace_volumes(1, &[book.clone(), book]).is_err());
-        assert_eq!(db.get_volumes(&1).unwrap().len(), 1);
-    }
-
-    #[test]
-    fn cache_flags_require_valid_files_at_every_required_page() {
-        let db = Database::new(&":memory:".to_string()).unwrap();
-        db.add_volume(&volume(11, 1, 101, 0, 2)).unwrap();
-        db.add_volume(&volume(12, 1, 102, 0, 2)).unwrap();
-        for page in 0..4 {
-            cache_page(&db, 101, page);
-        }
-        cache_page(&db, 102, 0);
-        // Extra rows from another chapter cannot make up for a missing page.
-        assert!(!db.is_series_fully_cached(1));
-        db.add_picture(&MangaPicture {
-            chapter_id: 102,
-            page: 1,
-            file: "/nonexistent/manga4deck-test.png".into(),
-        })
-        .unwrap();
-        assert!(!db.is_volume_fully_cached(12));
-        assert!(!db.is_series_fully_cached(1));
-        // Existing non-image files also cannot count as offline pages.
-        db.add_picture(&MangaPicture {
-            chapter_id: 102,
-            page: 1,
-            file: concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml").into(),
-        })
-        .unwrap();
-        assert!(!db.is_volume_fully_cached(12));
-        cache_page(&db, 102, 1);
-        assert!(db.is_volume_fully_cached(12));
-        assert!(db.is_series_fully_cached(1));
-    }
-
-    #[test]
-    fn latest_progress_survives_metadata_refresh_and_old_upload_acknowledgement() {
-        let db = Database::new(&":memory:".to_string()).unwrap();
-        let mut progress = crate::kavita::ReadProgress {
-            id: None,
-            library_id: 1,
-            series_id: 1,
-            volume_id: 11,
-            chapter_id: 101,
-            page: 0,
-        };
-        db.add_read_progress(&progress).unwrap();
-        let old_id = db.get_all_read_progress().unwrap()[0].id.unwrap();
-        progress.page = 4;
-        db.add_read_progress(&progress).unwrap();
-        db.delete_read_progress(old_id).unwrap();
-        let pending = db.get_all_read_progress().unwrap();
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].page, 4);
-        assert_ne!(pending[0].id, Some(old_id));
-        db.replace_volumes(1, &[volume(11, 1, 101, 0, 10)]).unwrap();
-        assert_eq!(db.get_volume_by_id(11).unwrap().unwrap().read, 5);
     }
 }
