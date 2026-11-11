@@ -11,6 +11,7 @@ mod kavita;
 use kavita::{get_cache_size, ConnectionCreds, Kavita, Library, ReadProgress, Series, Volume};
 
 mod dioxus_ui;
+mod local_api;
 mod storage;
 
 use axum::{
@@ -26,11 +27,10 @@ use serde::Serialize;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, Mutex};
-use tokio_tungstenite::{accept_async, tungstenite::Message};
-use tower_http::cors::{Any, CorsLayer};
+use tokio_tungstenite::{accept_hdr_async, tungstenite::Message};
 
 // const APP_NAME: &str = "manga4deck";
-const KAVITA_IP: &str = "0.0.0.0:11337";
+const KAVITA_IP: &str = "127.0.0.1:11337";
 
 type SharedKavita = Arc<Mutex<Kavita>>;
 
@@ -115,7 +115,7 @@ async fn toggle_offline_mode(
 async fn update_server_settings(
     Extension(kavita): Extension<SharedKavita>,
     Json(creds): Json<ConnectionCreds>,
-) -> (StatusCode, Json<ConnectionCreds>) {
+) -> (StatusCode, Json<ServerSettings>) {
     info(&format!(
         "Updating server settings: ip='{}' username='{}' password={} api_key={}",
         creds.ip,
@@ -136,13 +136,37 @@ async fn update_server_settings(
     let _ = kavita_guard.insert_setting("username", &creds.username);
     let _ = kavita_guard.insert_setting("password", &creds.password);
     let _ = kavita_guard.insert_setting("api_key", &creds.api_key);
-    let _ = kavita_guard.reconnect_with_creds().await;
-    (StatusCode::OK, Json(creds))
+    let result = kavita_guard.reconnect_with_creds().await;
+    let status = if result.is_ok() {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (status, Json(ServerSettings::from(&creds)))
+}
+
+#[derive(Serialize)]
+struct ServerSettings {
+    ip: String,
+    username: String,
+    has_password: bool,
+    has_api_key: bool,
+}
+
+impl From<&ConnectionCreds> for ServerSettings {
+    fn from(creds: &ConnectionCreds) -> Self {
+        Self {
+            ip: creds.ip.clone(),
+            username: creds.username.clone(),
+            has_password: !creds.password.is_empty(),
+            has_api_key: !creds.api_key.is_empty(),
+        }
+    }
 }
 
 async fn get_server_settings(
     Extension(kavita): Extension<SharedKavita>,
-) -> (StatusCode, Json<ConnectionCreds>) {
+) -> (StatusCode, Json<ServerSettings>) {
     info("[get_server_settings] Getting server settings...");
     let kavita_guard = kavita.lock().await;
     let ip = kavita_guard
@@ -171,7 +195,7 @@ async fn get_server_settings(
         password,
         api_key,
     };
-    (StatusCode::OK, Json(creds))
+    (StatusCode::OK, Json(ServerSettings::from(&creds)))
 }
 
 fn content_type_from_path(path: &str) -> &'static str {
@@ -275,7 +299,7 @@ async fn get_series_cover(
         Ok(series_cover) => {
             match read_file_response(
                 &series_cover.file,
-                Some("public, max-age=31536000, immutable"),
+                Some("private, max-age=31536000, immutable"),
             ) {
                 Ok(resp) => (StatusCode::OK, resp),
                 Err((status, resp)) => (status, resp),
@@ -298,7 +322,7 @@ async fn get_volume_cover(
         Ok(volume_cover) => {
             match read_file_response(
                 &volume_cover.file,
-                Some("public, max-age=31536000, immutable"),
+                Some("private, max-age=31536000, immutable"),
             ) {
                 Ok(resp) => (StatusCode::OK, resp),
                 Err((status, resp)) => (status, resp),
@@ -344,7 +368,7 @@ async fn get_volumes(
 
 async fn get_picture(
     Extension(kavita): Extension<SharedKavita>,
-    Path((series_id, volume_id, chapter_id, page)): Path<(i32, i32, i32, i32)>,
+    Path((_series_id, _volume_id, chapter_id, page)): Path<(i32, i32, i32, i32)>,
 ) -> (StatusCode, Response) {
     // info(&format!("Getting picture for series: {}, volume: {}, chapter: {}, page: {}", series_id, volume_id, chapter_id, page));
     let kavita_guard = kavita.lock().await;
@@ -361,30 +385,6 @@ async fn get_picture(
             );
         }
     };
-
-    let library_id = kavita_guard.get_series_library_id(series_id).unwrap_or(0);
-
-    if let Err(err) = kavita_guard
-        .save_progress(&ReadProgress {
-            id: None,
-            library_id,
-            series_id,
-            volume_id,
-            chapter_id,
-            page,
-        })
-        .await
-    {
-        info(&format!(
-            "Progress update failed from picture route: series_id={} volume_id={} chapter_id={} page={} err={}",
-            series_id, volume_id, chapter_id, page, err
-        ));
-    } else {
-        info(&format!(
-            "Progress updated from picture route: series_id={} volume_id={} chapter_id={} page={}",
-            series_id, volume_id, chapter_id, page
-        ));
-    }
 
     match read_file_response(&picture, None) {
         Ok(resp) => (StatusCode::OK, resp),
@@ -495,7 +495,7 @@ async fn remove_series_cache_route(
 }
 
 async fn start_websocket_server(sender: WebSocketSender) {
-    let addr = "0.0.0.0:11338";
+    let addr = "127.0.0.1:11338";
     let listener = match TcpListener::bind(addr).await {
         Ok(l) => l,
         Err(err) => {
@@ -522,7 +522,20 @@ async fn handle_websocket_connection(
     stream: TcpStream,
     sender: WebSocketSender,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let ws_stream = accept_async(stream).await?;
+    let ws_stream = accept_hdr_async(
+        stream,
+        |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+            if local_api::is_authorized(request.headers()) {
+                Ok(response)
+            } else {
+                Err(axum::http::Response::builder()
+                    .status(401)
+                    .body(Some("Local API authentication required".to_string()))
+                    .unwrap())
+            }
+        },
+    )
+    .await?;
     let (mut sender_ws, mut receiver_ws) = ws_stream.split();
     let mut rx = sender.subscribe();
 
@@ -586,14 +599,8 @@ async fn initialize_kavita() -> SharedKavita {
     Arc::new(Mutex::new(kavita))
 }
 
-async fn run_http_server(kavita: SharedKavita) {
-    // Create CORS layer (allow all origins and methods)
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
-
-    let app = Router::new()
+fn http_app(kavita: SharedKavita) -> Router {
+    let api = Router::new()
         .route("/api/logs", get(get_logs))
         .route("/api/status", get(get_status))
         .route("/api/toggle-offline-mode", post(toggle_offline_mode))
@@ -624,8 +631,23 @@ async fn run_http_server(kavita: SharedKavita) {
             "/api/cache/remove/{series_id}",
             post(remove_series_cache_route),
         )
-        .layer(cors)
-        .layer(Extension(kavita));
+        .route_layer(axum::middleware::from_fn(local_api::authorize));
+
+    // Images cannot attach bearer headers. Give the native UI an unguessable,
+    // process-scoped media path; it exposes no control/settings endpoints.
+    let media = Router::new()
+        .route("/series-cover/{series_id}", get(get_series_cover))
+        .route("/volumes-cover/{volume_id}", get(get_volume_cover))
+        .route(
+            "/picture/{series}/{volume}/{chapter}/{page}",
+            get(get_picture),
+        );
+    api.nest(&local_api::media_prefix(), media)
+        .layer(Extension(kavita))
+}
+
+async fn run_http_server(kavita: SharedKavita) {
+    let app = http_app(kavita);
 
     // Run the server
     let listener = match tokio::net::TcpListener::bind(KAVITA_IP).await {
@@ -676,7 +698,11 @@ fn main() {
 }
 
 fn run_frontend() {
-    info("🚀 Manga4Deck v0.6.6 - Starting Manga4Deck native UI...");
+    info(concat!(
+        "🚀 Manga4Deck v",
+        env!("CARGO_PKG_VERSION"),
+        " - Starting Manga4Deck native UI..."
+    ));
 
     let runtime = tokio::runtime::Runtime::new().expect("failed to create native UI tokio runtime");
     let _runtime_guard = runtime.enter();
@@ -687,4 +713,152 @@ fn run_frontend() {
     });
 
     dioxus_ui::run_ui(kavita);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn test_server(kavita: Kavita) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let app = http_app(Arc::new(Mutex::new(kavita)));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (url, server)
+    }
+
+    #[tokio::test]
+    async fn settings_require_authentication_and_never_return_secrets() {
+        let k = kavita::tests::test_kavita();
+        k.insert_setting("password", "private-password").unwrap();
+        k.insert_setting("api_key", "private-key").unwrap();
+        let (url, server) = test_server(k).await;
+        let client = reqwest::Client::new();
+        for method in [reqwest::Method::GET, reqwest::Method::POST] {
+            let response = client.request(method, format!("{url}/api/server-settings"))
+                .header("Origin", "https://untrusted.example")
+                .json(&serde_json::json!({"ip":"localhost:1","username":"reader","password":"secret","api_key":"secret"}))
+                .send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert!(response
+                .headers()
+                .get("access-control-allow-origin")
+                .is_none());
+        }
+        let response = client
+            .get(format!("{url}/api/server-settings"))
+            .header("Authorization", local_api::authorization_header())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert!(body.get("password").is_none() && body.get("api_key").is_none());
+        assert_eq!(body["has_password"], true);
+        assert_eq!(body["has_api_key"], true);
+        let response = client.post(format!("{url}/api/server-settings"))
+            .header("Authorization", local_api::authorization_header())
+            .json(&serde_json::json!({"ip":"127.0.0.1:1","username":"reader","password":"private-password","api_key":"private-key"}))
+            .send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert!(body.get("password").is_none() && body.get("api_key").is_none());
+        let update = ServerSettings::from(&ConnectionCreds {
+            ip: "localhost:1".into(),
+            username: "reader".into(),
+            password: "private-password".into(),
+            api_key: "private-key".into(),
+        });
+        let update_json = serde_json::to_string(&update).unwrap();
+        assert!(!update_json.contains("private-password") && !update_json.contains("private-key"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn preloading_a_batch_never_changes_progress() {
+        let mut k = kavita::tests::test_kavita();
+        k.offline_mode = true;
+        k.db.add_volume(&Volume {
+            id: 11,
+            series_id: 1,
+            chapter_id: 101,
+            volume_id: 11,
+            title: "Volume 1".into(),
+            read: 0,
+            pages: 10,
+            is_cached: false,
+        })
+        .unwrap();
+        for page in 0..10 {
+            k.db.add_picture(&kavita::MangaPicture {
+                chapter_id: 101,
+                page,
+                file: concat!(env!("CARGO_MANIFEST_DIR"), "/icons/32x32.png").into(),
+            })
+            .unwrap();
+        }
+        let db = k.db.clone();
+        let (url, server) = test_server(k).await;
+        let client = reqwest::Client::new();
+        let requests = (0..10).rev().map(|page| {
+            let url = format!("{url}{}/picture/1/11/101/{page}", local_api::media_prefix());
+            let client = client.clone();
+            async move { client.get(url).send().await.unwrap().status() }
+        });
+        for status in futures_util::future::join_all(requests).await {
+            assert_eq!(status, StatusCode::OK);
+        }
+        assert!(db.get_all_read_progress().unwrap().is_empty());
+        assert_eq!(db.get_volume_by_id(11).unwrap().unwrap().read, 0);
+        // Explicit visible-page events still record progress, including cached pages.
+        let response = client
+            .post(format!("{url}/api/progress/1/11/101/2"))
+            .header("Authorization", local_api::authorization_header())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(db.get_volume_by_id(11).unwrap().unwrap().read, 3);
+        assert_eq!(db.get_all_read_progress().unwrap()[0].page, 2);
+        assert_eq!(
+            client
+                .get(format!("{url}/api/picture/1/11/101/0"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            client
+                .get(format!("{url}/api/media/wrong-token/picture/1/11/101/0"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn websocket_rejects_unauthenticated_connections() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (sender, _) = broadcast::channel(10);
+            assert!(handle_websocket_connection(stream, sender).await.is_err());
+        });
+        let result = tokio_tungstenite::connect_async(format!("ws://{address}")).await;
+        match result {
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED)
+            }
+            _ => panic!("Unauthenticated WebSocket handshake was not rejected"),
+        }
+        server.await.unwrap();
+    }
 }

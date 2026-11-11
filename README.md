@@ -19,6 +19,8 @@ The app has a Rust backend and a native Manga4Deck UI focused on Steam Deck use.
 - Offline/cache-aware volume and series state
 - Cover thumbnails cached as small JPEGs for faster shelf loading
 - Reader with batch page loading
+- Reading progress follows the visible page; downloading pages does not mark them as read
+- PDF books displayed as page images in the same scrolling reader, with progress and offline caching
 - Keyboard and Steam Deck controller friendly navigation
 
 ## Controls
@@ -83,6 +85,13 @@ Check the Manga4Deck build:
 cargo check --manifest-path src/Cargo.toml
 ```
 
+Run the Rust and reader progress regression tests:
+
+```bash
+cargo test --manifest-path src/Cargo.toml --locked
+node --test src/tests/reader.test.mjs
+```
+
 Build the Manga4Deck binary:
 
 ```bash
@@ -93,8 +102,14 @@ cargo build --manifest-path src/Cargo.toml
 
 Manga4Deck expects access to a Kavita server. Server IP, username/password, and API key are stored by the app settings UI.
 
+PDF pages are rendered by Kavita using its reader image API (`extractPdf=true`) and cached locally like manga pages. Your Kavita version must support this option. The first page can take longer while the server renders the book. No local PDF renderer is needed. Cache a series before disconnecting to read its PDF pages offline.
+
+Volumes containing multiple manga chapters appear as separate chapter entries so page numbers and reading progress stay scoped to the correct chapter. Progress is saved locally before upload; failed uploads remain queued for the next page update or reconnect.
+
 The local backend listens on:
 
 ```text
-0.0.0.0:11337
+127.0.0.1:11337
 ```
+
+The HTTP and WebSocket APIs are restricted to the local machine and require a random per-run bearer token. The native UI uses private per-run URLs for images. Settings responses contain only connection details and indicators of saved credentials, never passwords or API keys. Cross-origin API access is disabled.

@@ -5,6 +5,14 @@ use std::sync::{Arc, Mutex};
 
 use crate::kavita::{Library, MangaPicture, Series, SeriesCover, Volume, VolumeCover};
 
+pub(crate) fn valid_picture_file(path: &str) -> bool {
+    image::ImageReader::open(path)
+        .ok()
+        .and_then(|reader| reader.with_guessed_format().ok())
+        .and_then(|reader| reader.into_dimensions().ok())
+        .is_some_and(|(width, height)| width > 0 && height > 0)
+}
+
 #[derive(Clone)]
 pub struct Database {
     conn: Arc<Mutex<Connection>>,
@@ -308,6 +316,39 @@ impl Database {
         Ok(())
     }
 
+    /// Refresh shelf metadata atomically, including PDF books split into chapter entries.
+    /// Cached pictures and offline progress stay attached to their Kavita chapter IDs.
+    pub fn replace_volumes(
+        &self,
+        series_id: i32,
+        volumes: &[Volume],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut conn = self.conn.lock().unwrap();
+        let transaction = conn.transaction()?;
+        transaction.execute("DELETE FROM volumes WHERE series_id = ?", [series_id])?;
+        for volume in volumes {
+            transaction.execute(
+                "INSERT INTO volumes (id, series_id, chapter_id, volume_id, title, read, pages) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                rusqlite::params![volume.id, volume.series_id, volume.chapter_id, volume.volume_id, volume.title, volume.read, volume.pages],
+            )?;
+        }
+        // A shelf refresh may race a reconnect upload. Keep unsynced local progress
+        // instead of replacing it with older server metadata.
+        transaction.execute(
+            "UPDATE volumes SET read = MIN(pages, (
+                SELECT rp.page + 1 FROM read_progress rp
+                WHERE rp.series_id = volumes.series_id AND rp.chapter_id = volumes.chapter_id
+                AND rp.volume_id = volumes.volume_id ORDER BY rp.id DESC LIMIT 1
+             )) WHERE series_id = ? AND pages > 0 AND EXISTS (
+                SELECT 1 FROM read_progress rp WHERE rp.series_id = volumes.series_id
+                AND rp.chapter_id = volumes.chapter_id AND rp.volume_id = volumes.volume_id
+             )",
+            [series_id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn add_volume_cover(
         &self,
         volume_cover: &VolumeCover,
@@ -369,6 +410,15 @@ impl Database {
                     picture.file.to_string(),
                 ],
             )?;
+        } else {
+            conn.execute(
+                "UPDATE manga_pictures SET file = ? WHERE chapter_id = ? AND page = ?",
+                [
+                    picture.file.to_string(),
+                    picture.chapter_id.to_string(),
+                    picture.page.to_string(),
+                ],
+            )?;
         }
         Ok(())
     }
@@ -419,61 +469,41 @@ impl Database {
     }
 
     pub fn is_volume_fully_cached(&self, volume_id: i32) -> bool {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = match conn.prepare(
-            "SELECT pages, chapter_id FROM volumes WHERE id = ? AND pages > 0",
-        ) {
-            Ok(stmt) => stmt,
-            Err(_) => return false,
+        let Ok(Some(volume)) = self.get_volume_by_id(volume_id) else {
+            return false;
         };
-        let (pages, chapter_id): (i32, i32) =
-            match stmt.query_row([volume_id.to_string()], |row| Ok((row.get(0)?, row.get(1)?))) {
-                Ok(row) => row,
-                Err(_) => return false,
-            };
-
-        let mut stmt = match conn.prepare(
-            "SELECT COUNT(DISTINCT page) FROM manga_pictures WHERE chapter_id = ?",
-        ) {
-            Ok(stmt) => stmt,
-            Err(_) => return false,
+        if volume.pages <= 0 {
+            return false;
+        }
+        let files: Result<std::collections::HashMap<i32, String>, rusqlite::Error> = (|| {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare("SELECT page, file FROM manga_pictures WHERE chapter_id = ? AND page >= 0 AND page < ?")?;
+            let rows = stmt.query_map([volume.chapter_id, volume.pages], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?;
+            rows.collect()
+        })();
+        let Ok(files) = files else {
+            return false;
         };
-        let cached_pages = stmt
-            .query_row([chapter_id.to_string()], |row| row.get::<_, i32>(0))
-            .unwrap_or(0);
-        cached_pages >= pages
+        // Validate the exact required indices, not an aggregate count that can
+        // include stale/out-of-range rows or files removed from disk.
+        (0..volume.pages).all(|page| {
+            files
+                .get(&page)
+                .is_some_and(|file| valid_picture_file(file))
+        })
     }
 
     pub fn is_series_fully_cached(&self, series_id: i32) -> bool {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = match conn.prepare(
-            "SELECT COALESCE(SUM(pages), 0)
-             FROM volumes
-             WHERE series_id = ? AND pages > 0 AND read < pages",
-        ) {
-            Ok(stmt) => stmt,
-            Err(_) => return false,
-        };
-        let total_pages = stmt
-            .query_row([series_id.to_string()], |row| row.get::<_, i32>(0))
-            .unwrap_or(0);
-        if total_pages <= 0 {
+        let Ok(volumes) = self.get_volumes(&series_id) else {
             return false;
-        }
-
-        let mut stmt = match conn.prepare(
-            "SELECT COUNT(DISTINCT mp.chapter_id || ':' || mp.page)
-             FROM manga_pictures mp
-             INNER JOIN volumes v ON mp.chapter_id = v.chapter_id
-             WHERE v.series_id = ? AND v.pages > 0 AND v.read < v.pages",
-        ) {
-            Ok(stmt) => stmt,
-            Err(_) => return false,
         };
-        let cached_pages = stmt
-            .query_row([series_id.to_string()], |row| row.get::<_, i32>(0))
-            .unwrap_or(0);
-        cached_pages >= total_pages
+        let unread: Vec<_> = volumes
+            .iter()
+            .filter(|v| v.pages > 0 && v.read < v.pages)
+            .collect();
+        !unread.is_empty() && unread.iter().all(|v| self.is_volume_fully_cached(v.id))
     }
 
     // Get all picture files for a series (through volumes)
@@ -526,8 +556,15 @@ impl Database {
         &self,
         progress: &crate::kavita::ReadProgress,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
+        let mut conn = self.conn.lock().unwrap();
+        let transaction = conn.transaction()?;
+        // Only the newest resume position for a chapter needs uploading. Insert a
+        // new ID so an in-flight upload cannot delete a newer update's record.
+        transaction.execute(
+            "DELETE FROM read_progress WHERE library_id = ? AND series_id = ? AND volume_id = ? AND chapter_id = ?",
+            rusqlite::params![progress.library_id, progress.series_id, progress.volume_id, progress.chapter_id],
+        )?;
+        transaction.execute(
             "INSERT INTO read_progress (library_id, series_id, volume_id, chapter_id, page) VALUES (?, ?, ?, ?, ?)",
             [
                 progress.library_id.to_string(),
@@ -537,6 +574,7 @@ impl Database {
                 progress.page.to_string(),
             ],
         )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -569,7 +607,7 @@ impl Database {
     ) -> Result<Vec<crate::kavita::ReadProgress>, Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, library_id, series_id, volume_id, chapter_id, page FROM read_progress",
+            "SELECT id, library_id, series_id, volume_id, chapter_id, page FROM read_progress ORDER BY id",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(crate::kavita::ReadProgress {
@@ -589,9 +627,18 @@ impl Database {
         Ok(progress)
     }
 
-    pub fn clear_read_progress(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn has_read_progress(&self, id: i32) -> Result<bool, Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM read_progress", [])?;
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM read_progress WHERE id = ?)",
+            [id],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn delete_read_progress(&self, id: i32) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM read_progress WHERE id = ?", [id])?;
         Ok(())
     }
 }
@@ -617,7 +664,7 @@ mod tests {
         db.add_picture(&MangaPicture {
             chapter_id,
             page,
-            file: format!("cached-{chapter_id}-{page}.png"),
+            file: concat!(env!("CARGO_MANIFEST_DIR"), "/icons/32x32.png").to_string(),
         })
         .unwrap();
     }
@@ -650,5 +697,83 @@ mod tests {
         db.add_volume(&volume(11, 1, 101, 2, 2)).unwrap();
 
         assert!(!db.is_series_fully_cached(1));
+    }
+
+    #[test]
+    fn refreshing_pdf_metadata_replaces_aggregate_volumes_and_preserves_page_cache() {
+        let db = Database::new(&":memory:".to_string()).unwrap();
+        db.add_volume(&volume(11, 1, 101, 0, 2)).unwrap();
+        db.add_volume(&volume(21, 2, 201, 0, 1)).unwrap();
+        cache_page(&db, 101, 0);
+        let mut book = volume(-101, 1, 101, 0, 2);
+        book.volume_id = 11;
+        db.replace_volumes(1, &[book.clone()]).unwrap();
+        assert!(db.get_volume_by_id(11).unwrap().is_none());
+        assert_eq!(db.get_volume_by_id(-101).unwrap().unwrap().volume_id, 11);
+        assert!(db.get_volume_by_id(21).unwrap().is_some());
+        assert!(db.is_picture_cached(101, 0));
+        assert!(!db.is_volume_fully_cached(-101));
+        cache_page(&db, 101, 1);
+        assert!(db.is_volume_fully_cached(-101));
+        assert!(db.is_series_fully_cached(1));
+        // Invalid replacement data must roll back instead of losing the existing shelf.
+        assert!(db.replace_volumes(1, &[book.clone(), book]).is_err());
+        assert_eq!(db.get_volumes(&1).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn cache_flags_require_valid_files_at_every_required_page() {
+        let db = Database::new(&":memory:".to_string()).unwrap();
+        db.add_volume(&volume(11, 1, 101, 0, 2)).unwrap();
+        db.add_volume(&volume(12, 1, 102, 0, 2)).unwrap();
+        for page in 0..4 {
+            cache_page(&db, 101, page);
+        }
+        cache_page(&db, 102, 0);
+        // Extra rows from another chapter cannot make up for a missing page.
+        assert!(!db.is_series_fully_cached(1));
+        db.add_picture(&MangaPicture {
+            chapter_id: 102,
+            page: 1,
+            file: "/nonexistent/manga4deck-test.png".into(),
+        })
+        .unwrap();
+        assert!(!db.is_volume_fully_cached(12));
+        assert!(!db.is_series_fully_cached(1));
+        // Existing non-image files also cannot count as offline pages.
+        db.add_picture(&MangaPicture {
+            chapter_id: 102,
+            page: 1,
+            file: concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml").into(),
+        })
+        .unwrap();
+        assert!(!db.is_volume_fully_cached(12));
+        cache_page(&db, 102, 1);
+        assert!(db.is_volume_fully_cached(12));
+        assert!(db.is_series_fully_cached(1));
+    }
+
+    #[test]
+    fn latest_progress_survives_metadata_refresh_and_old_upload_acknowledgement() {
+        let db = Database::new(&":memory:".to_string()).unwrap();
+        let mut progress = crate::kavita::ReadProgress {
+            id: None,
+            library_id: 1,
+            series_id: 1,
+            volume_id: 11,
+            chapter_id: 101,
+            page: 0,
+        };
+        db.add_read_progress(&progress).unwrap();
+        let old_id = db.get_all_read_progress().unwrap()[0].id.unwrap();
+        progress.page = 4;
+        db.add_read_progress(&progress).unwrap();
+        db.delete_read_progress(old_id).unwrap();
+        let pending = db.get_all_read_progress().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].page, 4);
+        assert_ne!(pending[0].id, Some(old_id));
+        db.replace_volumes(1, &[volume(11, 1, 101, 0, 10)]).unwrap();
+        assert_eq!(db.get_volume_by_id(11).unwrap().unwrap().read, 5);
     }
 }

@@ -6,7 +6,7 @@ use dioxus::prelude::*;
 use once_cell::sync::OnceCell;
 use tokio::sync::Mutex;
 
-use crate::kavita::{get_cache_size, Kavita, Library, Series, Volume};
+use crate::kavita::{get_cache_size, Kavita, Library, ReadProgress, Series, Volume};
 
 pub type SharedKavita = Arc<Mutex<Kavita>>;
 
@@ -290,7 +290,12 @@ fn move_series_selection(
     columns: usize,
 ) -> usize {
     if in_progress_count == 0 || completed_count == 0 {
-        return move_selection(current, key, in_progress_count + completed_count + 1, columns);
+        return move_selection(
+            current,
+            key,
+            in_progress_count + completed_count + 1,
+            columns,
+        );
     }
 
     match key {
@@ -359,8 +364,80 @@ fn initial_reader_page(volume: &Volume) -> i32 {
     if volume.pages <= 0 {
         0
     } else {
-        volume.read.clamp(0, volume.pages - 1)
+        // `read` is a count; resume at the last viewed page, not the next image.
+        volume.read.saturating_sub(1).clamp(0, volume.pages - 1)
     }
+}
+
+struct ReaderPages {
+    current: i32,
+    display_page: i32,
+    total_pages: i32,
+    first_page: i32,
+    loaded_until: i32,
+    loaded_count: i32,
+}
+
+impl ReaderPages {
+    fn new(pages: i32, current: i32, first: i32, loaded: i32) -> Self {
+        let total_pages = pages.max(0);
+        let max_page = total_pages.saturating_sub(1).max(0);
+        let current = current.clamp(0, max_page);
+        let first_page = first.clamp(0, max_page);
+        let loaded_until = loaded.clamp(first_page, max_page);
+        Self {
+            current,
+            display_page: if total_pages > 0 { current + 1 } else { 0 },
+            total_pages,
+            first_page,
+            loaded_until,
+            loaded_count: if total_pages > 0 {
+                loaded_until - first_page + 1
+            } else {
+                0
+            },
+        }
+    }
+}
+
+fn track_reader(
+    volume: Volume,
+    page: Signal<Page>,
+    reader_volume: Signal<Option<Volume>>,
+    mut reader_page: Signal<i32>,
+) {
+    spawn(async move {
+        let mut observer = document::eval(include_str!("reader.js"));
+        while let Ok(visible_page) = observer.recv::<i32>().await {
+            if page() != Page::Reader
+                || reader_volume.read().as_ref().map(|v| v.chapter_id) != Some(volume.chapter_id)
+            {
+                break;
+            }
+            if !(0..volume.pages).contains(&visible_page) {
+                continue;
+            }
+            reader_page.set(visible_page);
+            let snapshot = {
+                let shared = kavita();
+                let guard = shared.lock().await;
+                guard.clone()
+            };
+            let progress = ReadProgress {
+                id: None,
+                library_id: snapshot
+                    .get_series_library_id(volume.series_id)
+                    .unwrap_or(0),
+                series_id: volume.series_id,
+                volume_id: volume.volume_id,
+                chapter_id: volume.chapter_id,
+                page: visible_page,
+            };
+            if let Err(err) = snapshot.save_progress(&progress).await {
+                push_toast(format!("Failed to save reading progress: {err}"));
+            }
+        }
+    });
 }
 
 fn reader_batch_end(first_page: i32, total_pages: i32) -> i32 {
@@ -390,9 +467,7 @@ fn show_toast(
     toast_generation.set(toast_generation().wrapping_add(1));
 }
 
-fn push_toast(
-    message: String,
-) {
+fn push_toast(message: String) {
     let message = serde_json::to_string(&message).unwrap_or_else(|_| "\"\"".to_string());
     document::eval(&format!(
         r#"
@@ -1025,14 +1100,14 @@ html, body, #main {
 "#;
 
 fn app() -> Element {
-    let initial_status = load_status();
+    let mut status = use_signal(load_status);
+    let initial_status = status.peek().clone();
     let mut page = use_signal(|| Page::Dashboard);
     let mut selected_index = use_signal(|| 0usize);
     let mut dashboard_selection = use_signal(|| 0usize);
     let mut libraries_selection = use_signal(|| 0usize);
     let mut series_selection = use_signal(|| 0usize);
     let mut volumes_selection = use_signal(|| 0usize);
-    let mut status = use_signal(|| initial_status.clone());
     let mut toast = use_signal(|| None::<String>);
     let mut toast_generation = use_signal(|| 0u64);
     let mut libraries = use_signal(Vec::<Library>::new);
@@ -1155,19 +1230,24 @@ fn app() -> Element {
                         };
                         match refreshed {
                             Ok(items) => volumes.set(items),
-                            Err(err) => push_toast(
-                                format!("Failed to refresh cached volumes: {err}"),
-                            ),
+                            Err(err) => {
+                                push_toast(format!("Failed to refresh cached volumes: {err}"))
+                            }
                         }
                     }
                 }
 
                 if matches!(event, "caching_end" | "caching_cancelled") {
                     if let Some(series_id) = event_series_id {
+                        let is_cached = {
+                            let shared = kavita();
+                            let guard = shared.lock().await;
+                            guard.is_series_cached(series_id)
+                        };
                         let mut updated = series.read().clone();
                         for item in &mut updated {
                             if item.id == series_id {
-                                item.is_cached = event == "caching_end";
+                                item.is_cached = is_cached;
                             }
                         }
                         series.set(updated);
@@ -1255,12 +1335,12 @@ fn app() -> Element {
                                         if !reader_slider_visible() {
                                             reader_slider_visible.set(true);
                                         } else {
-                                            let max_page = volume.pages.saturating_sub(1);
+                                            let max_page = volume.pages.saturating_sub(1).max(0);
                                             let current = reader_page();
                                             let next = if key == "ArrowRight" {
                                                 (current + 1).min(max_page)
                                             } else {
-                                                current.saturating_sub(1)
+                                                current.saturating_sub(1).max(0)
                                             };
                                             reader_page.set(next);
                                             if next < reader_first_page() {
@@ -1903,7 +1983,7 @@ fn app() -> Element {
                                                 let title = item.title.clone();
                                                 let progress = item.read.clamp(0, 100);
                                                 let cached = item.is_cached;
-                                                let cover_url = format!("http://localhost:11337/api/series-cover/{id}?thumb=1");
+                                                let cover_url = crate::local_api::media_url(&format!("series-cover/{id}"));
                                                 let class = if selected_snapshot == index + 1 { "series-card selected" } else { "series-card" };
                                                 let progress_class = if cached {
                                                     "series-progress-fill cached"
@@ -1974,7 +2054,7 @@ fn app() -> Element {
                                                 let id = item.id;
                                                 let title = item.title.clone();
                                                 let progress = item.read.clamp(0, 100);
-                                                let cover_url = format!("http://localhost:11337/api/series-cover/{id}?thumb=1");
+                                                let cover_url = crate::local_api::media_url(&format!("series-cover/{id}"));
                                                 let nav_index = in_progress_series.len() + index + 1;
                                                 let class = if selected_snapshot == nav_index { "series-card selected" } else { "series-card" };
                                                 let progress_class = if item.is_cached {
@@ -2088,7 +2168,7 @@ fn app() -> Element {
                                             };
                                             let complete = volume.pages > 0 && volume.read >= volume.pages;
                                             let cached = volume.is_cached;
-                                            let cover_url = format!("http://localhost:11337/api/volumes-cover/{cover_id}?thumb=1");
+                                            let cover_url = crate::local_api::media_url(&format!("volumes-cover/{cover_id}"));
                                             let class = if selected_snapshot == index + 1 { "series-card selected" } else { "series-card" };
                                             let progress_class = if complete {
                                                 "series-progress-fill complete"
@@ -2139,6 +2219,11 @@ fn app() -> Element {
                         Page::Reader => rsx! {
                             div {
                                 class: "reader-page",
+                                onmounted: move |_| {
+                                    if let Some(volume) = reader_volume.read().clone() {
+                                        track_reader(volume, page, reader_volume, reader_page);
+                                    }
+                                },
                                 onscroll: move |event| {
                                     if let Some(volume) = reader_volume.read().as_ref() {
                                         let data = event.data();
@@ -2152,18 +2237,9 @@ fn app() -> Element {
                                 },
                                 {
                                     if let Some(volume) = reader_volume.read().clone() {
-                                        let current = reader_page().clamp(0, volume.pages.saturating_sub(1));
-                                        let display_page = current + 1;
-                                        let total_pages = volume.pages.max(0);
+                                        let ReaderPages { current, display_page, total_pages, first_page, loaded_until, loaded_count } =
+                                            ReaderPages::new(volume.pages, reader_page(), reader_first_page(), reader_loaded_until());
                                         let title = volume.title.clone();
-                                        let first_page = reader_first_page().clamp(0, volume.pages.saturating_sub(1));
-                                        let loaded_until = reader_loaded_until()
-                                            .clamp(first_page, volume.pages.saturating_sub(1));
-                                        let loaded_count = if volume.pages > 0 {
-                                            loaded_until - first_page + 1
-                                        } else {
-                                            0
-                                        };
                                         rsx! {
                                             div { class: "reader-bar",
                                                 button {
@@ -2185,13 +2261,13 @@ fn app() -> Element {
                                             div { class: "reader-stage",
                                                 if volume.pages > 0 {
                                                     {(first_page..=loaded_until).map(|page_number| {
-                                                        let image_url = format!(
-                                                            "http://localhost:11337/api/picture/{}/{}/{}/{}",
+                                                        let image_url = crate::local_api::media_url(&format!(
+                                                            "picture/{}/{}/{}/{}",
                                                             volume.series_id,
                                                             volume.volume_id,
                                                             volume.chapter_id,
                                                             page_number
-                                                        );
+                                                        ));
                                                         let page_label = page_number + 1;
                                                         rsx! {
                                                             div {
@@ -2335,4 +2411,44 @@ pub fn run_ui(kavita: SharedKavita) {
                 .with_menu(None),
         )
         .launch(app);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_volumes_have_safe_render_bounds_and_no_displayed_page() {
+        for pages in [0, -1] {
+            let state = ReaderPages::new(pages, 10, -1, 20);
+            assert_eq!(state.total_pages, 0);
+            assert_eq!(state.display_page, 0);
+            assert_eq!(state.loaded_count, 0);
+            assert_eq!(
+                (state.current, state.first_page, state.loaded_until),
+                (0, 0, 0)
+            );
+        }
+    }
+
+    #[test]
+    fn reopening_a_volume_resumes_the_last_visible_page() {
+        let mut volume = Volume {
+            id: 1,
+            series_id: 1,
+            chapter_id: 1,
+            volume_id: 1,
+            title: String::new(),
+            read: 3,
+            pages: 10,
+            is_cached: false,
+        };
+        assert_eq!(initial_reader_page(&volume), 2);
+        volume.read = 0;
+        assert_eq!(initial_reader_page(&volume), 0);
+        volume.read = 10;
+        assert_eq!(initial_reader_page(&volume), 9);
+        volume.pages = 0;
+        assert_eq!(initial_reader_page(&volume), 0);
+    }
 }

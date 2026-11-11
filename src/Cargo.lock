@@ -2642,12 +2642,13 @@ dependencies = [
 
 [[package]]
 name = "manga4deck"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "axum",
  "dioxus",
  "dirs",
  "futures-util",
+ "getrandom 0.3.4",
  "image",
  "md-5",
  "once_cell",
