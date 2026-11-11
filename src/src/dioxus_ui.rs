@@ -6,7 +6,9 @@ use dioxus::prelude::*;
 use once_cell::sync::OnceCell;
 use tokio::sync::Mutex;
 
-use crate::kavita::{get_cache_size, Kavita, Library, ReadProgress, Series, Volume};
+use crate::kavita::{
+    get_cache_size, ConnectionCreds, Kavita, Library, ReadProgress, Series, Volume,
+};
 
 pub type SharedKavita = Arc<Mutex<Kavita>>;
 
@@ -247,6 +249,22 @@ async fn save_settings(
     result
 }
 
+async fn connect_settings(
+    creds: ConnectionCreds,
+    mut status: Signal<UiStatus>,
+    mut toast: Signal<Option<String>>,
+    mut toast_generation: Signal<u64>,
+) {
+    let result = save_settings(creds.ip, creds.username, creds.password, creds.api_key).await;
+    status.set(load_status().await);
+    let message = match result {
+        Ok(()) => "Connected to Kavita. Settings saved.".to_string(),
+        Err(err) => format!("Could not connect: {err}"),
+    };
+    show_toast(&mut status, &mut toast, &mut toast_generation, message);
+    document::eval("document.querySelector('.settings-save')?.focus({ preventScroll: true });");
+}
+
 fn run_ui_action(mut busy: Signal<bool>, action: impl std::future::Future<Output = ()> + 'static) {
     if busy() {
         return;
@@ -287,7 +305,7 @@ fn tile_columns(page: Page, shelf_columns: usize) -> usize {
     match page {
         Page::Libraries | Page::Series | Page::Volumes | Page::Dashboard => shelf_columns.max(1),
         Page::Reader => 1,
-        Page::Settings => 1,
+        Page::Settings => 2,
     }
 }
 
@@ -608,59 +626,11 @@ html, body, #main {
   background: #050505;
   overflow-x: hidden;
 }
-.status {
-  height: 33px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 12px;
-  background: #22c55e;
-  color: #fff;
-  font-size: 17px;
-  font-weight: 700;
-}
 .tiles {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
   gap: 8px;
-}
-.tile {
-  width: 150px;
-  height: 150px;
-  border: 1px solid #d1d5db;
-  border-radius: 4px;
-  background: #d1d5db;
-  color: #0a0a0a;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 10px;
-  box-sizing: border-box;
-  cursor: pointer;
-}
-.tile:focus,
-.tile:hover,
-.tile.selected {
-  outline: none;
-  border: 3px solid #ff4b4b;
-}
-.title {
-  font-size: 16px;
-  font-weight: 800;
-  text-align: center;
-}
-.subtitle {
-  margin-top: 8px;
-  color: #4b5563;
-  font-size: 13px;
-  text-align: center;
-}
-.message {
-  margin-top: 12px;
-  color: #fff;
-  font-size: 12px;
 }
 .toast {
   position: fixed;
@@ -693,17 +663,190 @@ html, body, #main {
     transform: translateX(-50%) translateY(0);
   }
 }
-.settings {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-width: 420px;
+.app.settings-mode {
+  padding: 32px 24px;
 }
-.settings input {
-  height: 36px;
-  padding: 0 10px;
-  border: 1px solid #4b5563;
-  border-radius: 4px;
+.settings-mode > .tiles {
+  display: block;
+}
+.settings-page {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+}
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+.settings-header h1 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.6px;
+}
+.settings-description {
+  margin: 8px 0 0;
+  color: #9ca5b4;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.settings-connection {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid rgba(74, 222, 128, 0.24);
+  border-radius: 999px;
+  background: rgba(74, 222, 128, 0.08);
+  color: #86efac;
+  font-size: 13px;
+  font-weight: 600;
+}
+.settings-connection.offline {
+  border-color: #3c4350;
+  background: #20242c;
+  color: #aab2c0;
+}
+.settings-connection-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.settings-card {
+  margin: 0;
+  border: 1px solid #303541;
+  border-radius: 12px;
+  background: #191c23;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.16);
+}
+.settings-card-header {
+  padding: 24px 26px 0;
+}
+.settings-card-header h2 {
+  margin: 0;
+  color: #eef0f5;
+  font-size: 17px;
+  font-weight: 600;
+}
+.settings-account {
+  margin: 7px 0 0;
+  color: #9ca5b4;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.settings-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 22px 24px;
+  padding: 24px 26px 20px;
+}
+.settings-field {
+  min-width: 0;
+}
+.settings-field label {
+  display: block;
+  margin-bottom: 8px;
+  color: #dce1ea;
+  font-size: 14px;
+  font-weight: 500;
+}
+.settings-input {
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border: 1px solid #3a414e;
+  border-radius: 6px;
+  background: #11141a;
+  color: #f1f3f7;
+  font: inherit;
+  font-size: 15px;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.settings-input::placeholder {
+  color: #747e90;
+  opacity: 1;
+}
+.settings-input:focus {
+  outline: none;
+  border-color: #82a7ff;
+  box-shadow: 0 0 0 3px rgba(130, 167, 255, 0.14);
+}
+.settings-input[readonly] {
+  opacity: 0.65;
+  cursor: progress;
+}
+.settings-hint {
+  margin: 7px 0 0;
+  color: #8d97a8;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.settings-credential-note {
+  margin: 0;
+  padding: 0 26px 22px;
+  color: #9ca5b4;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 20px 26px;
+  border-top: 1px solid #303541;
+}
+.settings-button {
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 10px 18px;
+  border: 1px solid #424b5a;
+  border-radius: 6px;
+  background: transparent;
+  color: #d5dbe7;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.settings-button:hover {
+  background: #252b35;
+}
+.settings-save {
+  min-width: 154px;
+  border-color: #86a8ff;
+  background: #86a8ff;
+  color: #10182c;
+}
+.settings-save:hover {
+  border-color: #a0bbff;
+  background: #a0bbff;
+}
+.settings-button:focus-visible,
+.settings-button.selected {
+  outline: 2px solid #86a8ff;
+  outline-offset: 3px;
+}
+.settings-button[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: progress;
+}
+@media (max-width: 600px) {
+  .app.settings-mode { padding: 24px 16px; }
+  .settings-header { align-items: flex-start; gap: 12px; }
+  .settings-header h1 { font-size: 26px; }
+  .settings-card-header { padding: 20px 20px 0; }
+  .settings-fields { grid-template-columns: minmax(0, 1fr); padding: 20px; gap: 18px; }
+  .settings-credential-note { padding: 0 20px 20px; }
+  .settings-actions { flex-direction: column; padding: 20px; }
+  .settings-button { width: 100%; }
 }
 .series-page {
   width: 100%;
@@ -1411,7 +1554,7 @@ fn app() -> Element {
     ) {
         "app series-mode"
     } else {
-        "app"
+        "app settings-mode"
     };
 
     rsx! {
@@ -1700,18 +1843,13 @@ fn app() -> Element {
                                 }
                                 Page::Reader => {}
                                 Page::Settings => match selected {
-                                    0 => match save_settings(
-                                        server_ip.read().clone(),
-                                        username.read().clone(),
-                                        password.read().clone(),
-                                        api_key.read().clone(),
-                                    ).await {
-                                        Ok(()) => status.set(load_status().await),
-                                        Err(err) => {
-                                            status.set(load_status().await);
-                                            show_toast(&mut status, &mut toast, &mut toast_generation, format!("Failed to save settings: {err}"));
+                                    0 => connect_settings(
+                                        ConnectionCreds {
+                                            ip: server_ip(), username: username(),
+                                            password: password(), api_key: api_key(),
                                         },
-                                    },
+                                        status, toast, toast_generation,
+                                    ).await,
                                     1 => {
                                         selected_index.set(dashboard_selection());
                                         page.set(Page::Dashboard);
@@ -1927,13 +2065,6 @@ fn app() -> Element {
 
                 });
             },
-            if !matches!(
-                page_snapshot,
-                Page::Dashboard | Page::Libraries | Page::Series | Page::Volumes
-                    | Page::Reader
-            ) {
-                div { class: "status", "{status_snapshot.line()}" }
-            }
             if busy() {
                 div { class: "busy-indicator", role: "status", "Loading…" }
             }
@@ -2559,77 +2690,119 @@ fn app() -> Element {
                             }
                         },
                         Page::Settings => rsx! {
-                            div { class: "settings",
-                                input {
-                                    r#type: "text",
-                                    "aria-label": "Server address",
-                                    disabled: busy(),
-                                    onkeydown: move |event| event.stop_propagation(),
-                                    value: "{server_ip.read()}",
-                                    placeholder: "Server IP (host:port)",
-                                    oninput: move |event| server_ip.set(event.value()),
+                            section { class: "settings-page", "aria-labelledby": "settings-title",
+                                header { class: "settings-header",
+                                    div {
+                                        h1 { id: "settings-title", "Settings" }
+                                        p { class: "settings-description", "Manage your Kavita connection." }
+                                    }
+                                    div {
+                                        class: if status_snapshot.offline_mode { "settings-connection offline" } else { "settings-connection" },
+                                        role: "status",
+                                        "aria-live": "polite",
+                                        span { class: "settings-connection-dot", "aria-hidden": "true" }
+                                        if status_snapshot.offline_mode { "Offline" } else { "Connected" }
+                                    }
                                 }
-                                input {
-                                    r#type: "text",
-                                    "aria-label": "Username",
-                                    disabled: busy(),
-                                    onkeydown: move |event| event.stop_propagation(),
-                                    value: "{username.read()}",
-                                    placeholder: "Username",
-                                    oninput: move |event| username.set(event.value()),
-                                }
-                                input {
-                                    r#type: "password",
-                                    "aria-label": "Password",
-                                    disabled: busy(),
-                                    onkeydown: move |event| event.stop_propagation(),
-                                    value: "{password.read()}",
-                                    placeholder: "Password (blank keeps saved password)",
-                                    oninput: move |event| password.set(event.value()),
-                                }
-                                input {
-                                    r#type: "password",
-                                    "aria-label": "API key",
-                                    disabled: busy(),
-                                    onkeydown: move |event| event.stop_propagation(),
-                                    value: "{api_key.read()}",
-                                    placeholder: "API key (blank keeps saved key)",
-                                    oninput: move |event| api_key.set(event.value()),
-                                }
-                                button {
-                                    onfocus: move |_| selected_index.set(0),
-                                    "aria-disabled": "{busy}",
-                                    class: if selected_snapshot == 0 { "tile selected" } else { "tile" },
-                                    onclick: move |_| {
-                                        run_ui_action(busy, async move {
-                                            match save_settings(
-                                                server_ip.read().clone(),
-                                                username.read().clone(),
-                                                password.read().clone(),
-                                                api_key.read().clone(),
-                                            ).await {
-                                                Ok(()) => status.set(load_status().await),
-                                                Err(err) => {
-                                            status.set(load_status().await);
-                                            show_toast(&mut status, &mut toast, &mut toast_generation, format!("Failed to save settings: {err}"));
-                                        },
+                                form {
+                                    class: "settings-card",
+                                    onsubmit: move |event| {
+                                        event.prevent_default();
+                                        let creds = ConnectionCreds {
+                                            ip: server_ip(), username: username(),
+                                            password: password(), api_key: api_key(),
+                                        };
+                                        run_ui_action(busy, connect_settings(creds, status, toast, toast_generation));
+                                    },
+                                    div { class: "settings-card-header",
+                                        h2 { "Kavita server" }
+                                        p { class: "settings-account",
+                                            if status_snapshot.offline_mode {
+                                                "Enter your server details to connect."
+                                            } else if !status_snapshot.logged_as.is_empty() {
+                                                "Signed in as {status_snapshot.logged_as}"
+                                            } else {
+                                                "Your library connection settings."
                                             }
-
-                                        });
-                                    },
-                                    div { class: "title", "Save" }
-                                    div { class: "subtitle", "Reconnect" }
-                                }
-                                button {
-                                    onfocus: move |_| selected_index.set(1),
-                                    "aria-disabled": "{busy}",
-                                    class: if selected_snapshot == 1 { "tile selected" } else { "tile" },
-                                    onclick: move |_| {
-                                        selected_index.set(dashboard_selection());
-                                        page.set(Page::Dashboard);
-                                    },
-                                    div { class: "title", "Dashboard" }
-                                    div { class: "subtitle", "Home" }
+                                        }
+                                    }
+                                    div { class: "settings-fields",
+                                        div { class: "settings-field",
+                                            label { r#for: "settings-server", "Server address" }
+                                            input {
+                                                id: "settings-server", class: "settings-input",
+                                                r#type: "text", name: "server",
+                                                "aria-describedby": "settings-server-hint",
+                                                readonly: busy(),
+                                                onkeydown: move |event| event.stop_propagation(),
+                                                value: "{server_ip.read()}",
+                                                placeholder: "192.168.1.100:5000",
+                                                autocomplete: "off", spellcheck: "false",
+                                                oninput: move |event| server_ip.set(event.value()),
+                                            }
+                                            p { id: "settings-server-hint", class: "settings-hint", "Use host:port, without http://." }
+                                        }
+                                        div { class: "settings-field",
+                                            label { r#for: "settings-username", "Username" }
+                                            input {
+                                                id: "settings-username", class: "settings-input",
+                                                r#type: "text", name: "username", autocomplete: "username",
+                                                readonly: busy(), spellcheck: "false",
+                                                onkeydown: move |event| event.stop_propagation(),
+                                                value: "{username.read()}", placeholder: "Your Kavita username",
+                                                oninput: move |event| username.set(event.value()),
+                                            }
+                                        }
+                                        div { class: "settings-field",
+                                            label { r#for: "settings-password", "Password" }
+                                            input {
+                                                id: "settings-password", class: "settings-input",
+                                                r#type: "password", name: "password", autocomplete: "current-password",
+                                                "aria-describedby": "settings-credential-note",
+                                                readonly: busy(),
+                                                onkeydown: move |event| event.stop_propagation(),
+                                                value: "{password.read()}", placeholder: "Enter a new password",
+                                                oninput: move |event| password.set(event.value()),
+                                            }
+                                        }
+                                        div { class: "settings-field",
+                                            label { r#for: "settings-api-key", "API key" }
+                                            input {
+                                                id: "settings-api-key", class: "settings-input",
+                                                r#type: "password", name: "api_key", autocomplete: "off",
+                                                "aria-describedby": "settings-credential-note",
+                                                readonly: busy(),
+                                                onkeydown: move |event| event.stop_propagation(),
+                                                value: "{api_key.read()}", placeholder: "Enter a new API key",
+                                                oninput: move |event| api_key.set(event.value()),
+                                            }
+                                        }
+                                    }
+                                    p { id: "settings-credential-note", class: "settings-credential-note",
+                                        "Leave Password and API key blank to keep your saved credentials."
+                                    }
+                                    div { class: "settings-actions",
+                                        button {
+                                            r#type: "submit",
+                                            onfocus: move |_| selected_index.set(0),
+                                            "aria-disabled": "{busy}",
+                                            class: if selected_snapshot == 0 { "settings-button settings-save selected" } else { "settings-button settings-save" },
+                                            if busy() { "Connecting…" } else { "Save & connect" }
+                                        }
+                                        button {
+                                            r#type: "button",
+                                            onfocus: move |_| selected_index.set(1),
+                                            "aria-disabled": "{busy}",
+                                            class: if selected_snapshot == 1 { "settings-button selected" } else { "settings-button" },
+                                            onclick: move |_| {
+                                                if !busy() {
+                                                    selected_index.set(dashboard_selection());
+                                                    page.set(Page::Dashboard);
+                                                }
+                                            },
+                                            "Back to dashboard"
+                                        }
+                                    }
                                 }
                             }
                         },
