@@ -314,7 +314,7 @@ pub struct Library {
     pub title: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Series {
     pub id: i32,
     pub library_id: i32,
@@ -349,7 +349,7 @@ pub struct SeriesCover {
     pub file: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Volume {
     /// Kavita volume ID, or a negative chapter ID for an individual chapter/book.
     pub id: i32,

@@ -292,6 +292,45 @@ impl Database {
         }
     }
 
+    /// Prefer the last opened item, then recent pending progress, then a read item
+    /// from the local library. The saved item remains available after uploads
+    /// remove acknowledged rows from `read_progress`.
+    pub fn continue_reading(
+        &self,
+    ) -> Result<Vec<(Volume, String, i32)>, Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT v.id, v.series_id, v.chapter_id, v.volume_id, v.title, v.read, v.pages,
+                    s.title, s.library_id
+             FROM volumes v JOIN series s ON s.id = v.series_id
+             WHERE v.pages > 0 AND (v.read > 0 OR v.id = CAST(
+                 (SELECT value FROM settings WHERE key = 'last_read_volume' LIMIT 1) AS INTEGER))
+             ORDER BY (v.id = COALESCE(CAST(
+                 (SELECT value FROM settings WHERE key = 'last_read_volume' LIMIT 1) AS INTEGER), 0)) DESC,
+                 COALESCE((SELECT MAX(rp.id) FROM read_progress rp
+                           WHERE rp.series_id = v.series_id AND rp.chapter_id = v.chapter_id
+                             AND rp.volume_id = v.volume_id), 0) DESC,
+                 (v.read < v.pages) DESC, v.rowid DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                Volume {
+                    id: row.get(0)?,
+                    series_id: row.get(1)?,
+                    chapter_id: row.get(2)?,
+                    volume_id: row.get(3)?,
+                    title: row.get(4)?,
+                    read: row.get(5)?,
+                    pages: row.get(6)?,
+                    is_cached: false,
+                },
+                row.get(7)?,
+                row.get(8)?,
+            ))
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn add_volume(&self, volume: &Volume) -> Result<(), Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
         // check if volume already exists

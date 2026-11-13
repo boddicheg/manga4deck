@@ -16,7 +16,7 @@ From the repository root:
 cargo run --manifest-path src/Cargo.toml
 ```
 
-Open **Settings**, enter your Kavita address as `host:port` (for example, `192.168.1.100:5000`), your credentials and API key, then select **Save**. Connections currently use HTTP.
+Open **Settings → Connection**, enter your Kavita address as `host:port` (for example, `192.168.1.100:5000`), your credentials and API key, then select **Save & connect**. Connections currently use HTTP.
 
 Leave the password or API key blank to keep its saved value.
 
@@ -38,9 +38,13 @@ The first Left or Right press opens the slider; subsequent presses change the pa
 
 F2 starts a series download, stops an active download, or removes a fully cached series. It works from the series shelf, volume shelf, and reader.
 
+Home and Settings also support standard gamepads directly: the D-pad or left stick moves focus, A opens, B goes back, X opens Downloads, and Y opens Connection from Settings. With a keyboard, use arrows and Enter/Space, Esc to go back, X for Downloads, and S for Settings. Text fields keep their normal editing keys.
+
+Home shows your most recent volume and resumes at your saved page. Settings contains connection status, cache cleanup, server updates, connection details, online/offline mode, and Exit.
+
 ## Offline reading
 
-Download a series before disconnecting, then switch the dashboard's Online/Offline tile to offline. Downloads skip completed chapters. Offline browsing shows series whose remaining unread chapters are fully cached.
+Download a series before disconnecting, then use **Settings → Online** to switch to offline mode. Downloads skip completed chapters. Offline browsing shows series whose remaining unread chapters are fully cached.
 
 Progress follows the visible page, and reopening a chapter resumes there. Updates are saved locally before upload; failed uploads are retried on the next page update or reconnect.
 

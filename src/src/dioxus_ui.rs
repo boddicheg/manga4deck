@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine;
 use dioxus::desktop::{tao::dpi::LogicalSize, Config, WindowBuilder};
 use dioxus::prelude::*;
 use once_cell::sync::OnceCell;
@@ -9,6 +10,10 @@ use tokio::sync::Mutex;
 use crate::kavita::{
     get_cache_size, ConnectionCreds, Kavita, Library, ReadProgress, Series, Volume,
 };
+
+#[path = "ember_ui.rs"]
+mod ember_ui;
+use ember_ui::{EmberAction, EmberScreen, HomeRead};
 
 pub type SharedKavita = Arc<Mutex<Kavita>>;
 
@@ -26,7 +31,7 @@ enum Page {
     Settings,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct UiStatus {
     server_ip: String,
     logged_as: String,
@@ -34,24 +39,6 @@ struct UiStatus {
     offline_mode: bool,
     cache_mb: u64,
     message: String,
-}
-
-impl UiStatus {
-    fn line(&self) -> String {
-        if self.offline_mode {
-            format!("Server status: offline, ip is {}", self.server_ip)
-        } else {
-            format!(
-                "Server status: online, logged as {}, ip is {}",
-                if self.logged_as.is_empty() {
-                    "(not signed in)"
-                } else {
-                    &self.logged_as
-                },
-                self.server_ip,
-            )
-        }
-    }
 }
 
 fn kavita() -> SharedKavita {
@@ -93,6 +80,54 @@ async fn load_libraries() -> Result<Vec<Library>, String> {
         .get_libraries()
         .await
         .map_err(|err| err.to_string())
+}
+
+async fn load_home_read() -> Result<Option<HomeRead>, String> {
+    let state = snapshot().await;
+    tokio::task::spawn_blocking(move || {
+        let candidates = state.db.continue_reading().map_err(|err| err.to_string())?;
+        Ok(candidates
+            .into_iter()
+            .find_map(|(volume, title, library_id)| {
+                if state.offline_mode && !state.db.is_volume_fully_cached(volume.id) {
+                    return None;
+                }
+                Some(HomeRead {
+                    volume,
+                    title,
+                    library_id,
+                })
+            }))
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+async fn load_downloaded_series() -> Result<Vec<Series>, String> {
+    let state = snapshot().await;
+    tokio::task::spawn_blocking(move || {
+        let mut items = Vec::new();
+        for library in state.db.get_libraries().map_err(|err| err.to_string())? {
+            for item in state
+                .db
+                .get_series(&library.id)
+                .map_err(|err| err.to_string())?
+            {
+                let ready = state
+                    .db
+                    .get_volumes(&item.id)
+                    .map_err(|err| err.to_string())?
+                    .iter()
+                    .any(|v| state.db.is_volume_fully_cached(v.id));
+                if ready || state.is_series_caching(item.id) {
+                    items.push(item);
+                }
+            }
+        }
+        Ok(items)
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 async fn load_series(library_id: i32) -> Result<Vec<Series>, String> {
@@ -292,20 +327,21 @@ fn visible_tile_count(
     volumes: &[Volume],
 ) -> usize {
     match page {
-        Page::Dashboard => 6,
+        Page::Dashboard => 1,
         Page::Libraries => libraries.len() + 1,
         Page::Series => series.len() + 1,
         Page::Volumes => volumes.len() + 1,
         Page::Reader => 0,
-        Page::Settings => 2,
+        Page::Settings => 6,
     }
 }
 
 fn tile_columns(page: Page, shelf_columns: usize) -> usize {
     match page {
-        Page::Libraries | Page::Series | Page::Volumes | Page::Dashboard => shelf_columns.max(1),
+        Page::Libraries | Page::Series | Page::Volumes => shelf_columns.max(1),
+        Page::Dashboard => 1,
         Page::Reader => 1,
-        Page::Settings => 2,
+        Page::Settings => 3,
     }
 }
 
@@ -512,6 +548,9 @@ fn track_reader(
                 chapter_id: volume.chapter_id,
                 page: visible_page,
             };
+            if let Err(err) = snapshot.insert_setting("last_read_volume", &volume.id.to_string()) {
+                push_toast(format!("Failed to remember the current volume: {err}"));
+            }
             if let Err(err) = snapshot.save_progress(&progress).await {
                 push_toast(format!("Failed to save reading progress: {err}"));
             }
@@ -663,191 +702,6 @@ html, body, #main {
     transform: translateX(-50%) translateY(0);
   }
 }
-.app.settings-mode {
-  padding: 32px 24px;
-}
-.settings-mode > .tiles {
-  display: block;
-}
-.settings-page {
-  width: 100%;
-  max-width: 760px;
-  margin: 0 auto;
-}
-.settings-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  margin-bottom: 24px;
-}
-.settings-header h1 {
-  margin: 0;
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: -0.6px;
-}
-.settings-description {
-  margin: 8px 0 0;
-  color: #9ca5b4;
-  font-size: 14px;
-  line-height: 1.5;
-}
-.settings-connection {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border: 1px solid rgba(74, 222, 128, 0.24);
-  border-radius: 999px;
-  background: rgba(74, 222, 128, 0.08);
-  color: #86efac;
-  font-size: 13px;
-  font-weight: 600;
-}
-.settings-connection.offline {
-  border-color: #3c4350;
-  background: #20242c;
-  color: #aab2c0;
-}
-.settings-connection-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-}
-.settings-card {
-  margin: 0;
-  border: 1px solid #303541;
-  border-radius: 12px;
-  background: #191c23;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.16);
-}
-.settings-card-header {
-  padding: 24px 26px 0;
-}
-.settings-card-header h2 {
-  margin: 0;
-  color: #eef0f5;
-  font-size: 17px;
-  font-weight: 600;
-}
-.settings-account {
-  margin: 7px 0 0;
-  color: #9ca5b4;
-  font-size: 13px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-.settings-fields {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 22px 24px;
-  padding: 24px 26px 20px;
-}
-.settings-field {
-  min-width: 0;
-}
-.settings-field label {
-  display: block;
-  margin-bottom: 8px;
-  color: #dce1ea;
-  font-size: 14px;
-  font-weight: 500;
-}
-.settings-input {
-  width: 100%;
-  min-width: 0;
-  height: 44px;
-  box-sizing: border-box;
-  padding: 0 12px;
-  border: 1px solid #3a414e;
-  border-radius: 6px;
-  background: #11141a;
-  color: #f1f3f7;
-  font: inherit;
-  font-size: 15px;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
-}
-.settings-input::placeholder {
-  color: #747e90;
-  opacity: 1;
-}
-.settings-input:focus {
-  outline: none;
-  border-color: #82a7ff;
-  box-shadow: 0 0 0 3px rgba(130, 167, 255, 0.14);
-}
-.settings-input[readonly] {
-  opacity: 0.65;
-  cursor: progress;
-}
-.settings-hint {
-  margin: 7px 0 0;
-  color: #8d97a8;
-  font-size: 12px;
-  line-height: 1.5;
-}
-.settings-credential-note {
-  margin: 0;
-  padding: 0 26px 22px;
-  color: #9ca5b4;
-  font-size: 13px;
-  line-height: 1.5;
-}
-.settings-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  padding: 20px 26px;
-  border-top: 1px solid #303541;
-}
-.settings-button {
-  min-height: 44px;
-  box-sizing: border-box;
-  padding: 10px 18px;
-  border: 1px solid #424b5a;
-  border-radius: 6px;
-  background: transparent;
-  color: #d5dbe7;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.settings-button:hover {
-  background: #252b35;
-}
-.settings-save {
-  min-width: 154px;
-  border-color: #86a8ff;
-  background: #86a8ff;
-  color: #10182c;
-}
-.settings-save:hover {
-  border-color: #a0bbff;
-  background: #a0bbff;
-}
-.settings-button:focus-visible,
-.settings-button.selected {
-  outline: 2px solid #86a8ff;
-  outline-offset: 3px;
-}
-.settings-button[aria-disabled="true"] {
-  opacity: 0.6;
-  cursor: progress;
-}
-@media (max-width: 600px) {
-  .app.settings-mode { padding: 24px 16px; }
-  .settings-header { align-items: flex-start; gap: 12px; }
-  .settings-header h1 { font-size: 26px; }
-  .settings-card-header { padding: 20px 20px 0; }
-  .settings-fields { grid-template-columns: minmax(0, 1fr); padding: 20px; gap: 18px; }
-  .settings-credential-note { padding: 0 20px 20px; }
-  .settings-actions { flex-direction: column; padding: 20px; }
-  .settings-button { width: 100%; }
-}
 .series-page {
   width: 100%;
   min-height: 100vh;
@@ -904,18 +758,6 @@ html, body, #main {
 }
 .series-count {
   color: rgba(255,255,255,0.72);
-}
-.dashboard-status {
-  height: 34px;
-  margin: 12px 16px 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #22c55e;
-  color: #fff;
-  font-size: 15px;
-  font-weight: 800;
-  box-shadow: 0 4px 10px rgba(0,0,0,0.25);
 }
 .series-grid {
   position: relative;
@@ -1177,51 +1019,6 @@ html, body, #main {
   line-height: 1;
   text-align: center;
 }
-.dashboard-card {
-  position: relative;
-  z-index: 1;
-  width: 150px;
-  height: 200px;
-  padding: 0;
-  border: 1px solid rgba(0,0,0,0.42);
-  border-radius: 4px;
-  overflow: hidden;
-  background:
-    radial-gradient(circle at 50% 34%, rgba(255,255,255,0.18), transparent 34%),
-    linear-gradient(145deg, #d9dee6 0%, #bfc6d0 58%, #9fa8b4 100%);
-  color: #0b0f14;
-  cursor: pointer;
-  box-shadow: 8px -8px 8px rgba(0,0,0,0.22), 3px -3px 4px rgba(0,0,0,0.16), inset 0 0 0 1px rgba(255,255,255,0.22);
-}
-.dashboard-card:focus,
-.dashboard-card:hover,
-.dashboard-card.selected {
-  outline: none;
-  border: 2px solid #111;
-  box-shadow: 8px -8px 12px rgba(0,0,0,0.44), 3px -3px 6px rgba(0,0,0,0.34), 0 0 0 2px rgba(255,75,75,0.85);
-}
-.dashboard-card-title {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 62px;
-  padding: 0 10px;
-  font-size: 17px;
-  font-weight: 900;
-  line-height: 1.05;
-  text-align: center;
-}
-.dashboard-card-subtitle {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 102px;
-  padding: 0 10px;
-  color: #4b5563;
-  font-size: 13px;
-  line-height: 1.15;
-  text-align: center;
-}
 .reader-page {
   width: 100vw;
   height: 100vh;
@@ -1349,7 +1146,6 @@ fn app() -> Element {
     let mut status = use_signal(|| tokio::runtime::Handle::current().block_on(load_status()));
     let busy = use_signal(|| false);
     let mut shelf_columns = use_signal(|| SHELF_COLUMNS);
-    let initial_status = status.peek().clone();
     let mut page = use_signal(|| Page::Dashboard);
     let mut selected_index = use_signal(|| 0usize);
     let mut dashboard_selection = use_signal(|| 0usize);
@@ -1367,14 +1163,53 @@ fn app() -> Element {
     let mut reader_loaded_until = use_signal(|| 0i32);
     let mut reader_slider_visible = use_signal(|| false);
     let mut reader_slider_generation = use_signal(|| 0u64);
-    let mut server_ip = use_signal(|| initial_status.server_ip);
-    let mut username = use_signal(|| initial_status.saved_username);
-    let mut password = use_signal(String::new);
-    let mut api_key = use_signal(String::new);
     let mut cache_events_started = use_signal(|| false);
+
+    let mut home_read = use_signal(|| None::<HomeRead>);
+    let mut home_loading = use_signal(|| true);
+    let mut downloaded_series = use_signal(Vec::<Series>::new);
+    let mut home_generation = use_signal(|| 0u64);
+    use_effect(move || {
+        let current = page();
+        let _offline = status.read().offline_mode;
+        let generation = (*home_generation.peek()).wrapping_add(1);
+        home_generation.set(generation);
+        if matches!(current, Page::Dashboard | Page::Settings) {
+            if current == Page::Dashboard {
+                home_loading.set(true);
+            }
+            spawn(async move {
+                if current == Page::Dashboard {
+                    let result = load_home_read().await;
+                    if *home_generation.peek() != generation {
+                        return;
+                    }
+                    match result {
+                        Ok(read) => home_read.set(read),
+                        Err(err) => {
+                            home_read.set(None);
+                            push_toast(format!("Could not load reading progress: {err}"));
+                        }
+                    }
+                    home_loading.set(false);
+                }
+                let result = load_downloaded_series().await;
+                if *home_generation.peek() != generation {
+                    return;
+                }
+                match result {
+                    Ok(items) => downloaded_series.set(items),
+                    Err(err) => push_toast(format!("Could not load downloads: {err}")),
+                }
+            });
+        }
+    });
 
     use_effect(move || {
         let _ = selected_index();
+        if page() == Page::Reader {
+            document::eval("document.querySelector('.app')?.focus({ preventScroll: true });");
+        }
         if matches!(
             page(),
             Page::Dashboard | Page::Libraries | Page::Series | Page::Volumes
@@ -1548,26 +1383,211 @@ fn app() -> Element {
         &volumes_snapshot,
     );
     let selected_snapshot = selected_snapshot.min(selectable_count.saturating_sub(1));
-    let app_class = if matches!(
-        page_snapshot,
-        Page::Dashboard | Page::Libraries | Page::Series | Page::Volumes | Page::Reader
-    ) {
-        "app series-mode"
+    let app_class = if matches!(page_snapshot, Page::Dashboard | Page::Settings) {
+        "app ember-mode"
     } else {
-        "app settings-mode"
+        "app series-mode"
+    };
+
+    let on_ember_action = move |action: EmberAction| {
+        run_ui_action(busy, async move {
+            match action {
+                EmberAction::Home => {
+                    selected_index.set(0);
+                    page.set(Page::Dashboard);
+                }
+                EmberAction::Settings => {
+                    selected_index.set(3);
+                    page.set(Page::Settings);
+                }
+                EmberAction::Library => match load_libraries().await {
+                    Ok(items) => {
+                        libraries.set(items);
+                        selected_index.set(0);
+                        page.set(Page::Libraries);
+                    }
+                    Err(err) => show_toast(
+                        &mut status,
+                        &mut toast,
+                        &mut toast_generation,
+                        format!("Failed to load libraries: {err}"),
+                    ),
+                },
+                EmberAction::Resume(read) => {
+                    let state = snapshot().await;
+                    let context = (
+                        state.db.get_libraries(),
+                        state.db.get_series(&read.library_id),
+                        state.db.get_volumes(&read.volume.series_id),
+                    );
+                    match context {
+                        (Ok(libs), Ok(items), Ok(siblings)) => {
+                            libraries_selection.set(
+                                libs.iter()
+                                    .position(|l| l.id == read.library_id)
+                                    .map(|i| i + 1)
+                                    .unwrap_or(0),
+                            );
+                            series_selection.set(
+                                items
+                                    .iter()
+                                    .filter(|s| s.read < 100)
+                                    .chain(items.iter().filter(|s| s.read >= 100))
+                                    .position(|s| s.id == read.volume.series_id)
+                                    .map(|i| i + 1)
+                                    .unwrap_or(0),
+                            );
+                            volumes_selection.set(
+                                siblings
+                                    .iter()
+                                    .position(|v| v.id == read.volume.id)
+                                    .map(|i| i + 1)
+                                    .unwrap_or(0),
+                            );
+                            libraries.set(libs);
+                            series.set(items);
+                            volumes.set(siblings);
+                            let start = initial_reader_page(&read.volume);
+                            reader_page.set(start);
+                            reader_first_page.set(start);
+                            reader_loaded_until.set(reader_batch_end(start, read.volume.pages));
+                            reader_slider_visible.set(false);
+                            reader_volume.set(Some(read.volume));
+                            page.set(Page::Reader);
+                        }
+                        _ => show_toast(
+                            &mut status,
+                            &mut toast,
+                            &mut toast_generation,
+                            "Could not restore this volume. Open it from your library.".into(),
+                        ),
+                    }
+                }
+                EmberAction::OpenDownload(item) => {
+                    let state = snapshot().await;
+                    match state.get_cached_volumes(&item.id) {
+                        Ok(items) if !items.is_empty() => {
+                            if let Ok(libs) = state.db.get_libraries() {
+                                libraries_selection.set(
+                                    libs.iter()
+                                        .position(|l| l.id == item.library_id)
+                                        .map(|i| i + 1)
+                                        .unwrap_or(0),
+                                );
+                                libraries.set(libs);
+                            }
+                            if let Ok(items) = state.db.get_series(&item.library_id) {
+                                series_selection.set(
+                                    items
+                                        .iter()
+                                        .filter(|s| s.read < 100)
+                                        .chain(items.iter().filter(|s| s.read >= 100))
+                                        .position(|s| s.id == item.id)
+                                        .map(|i| i + 1)
+                                        .unwrap_or(0),
+                                );
+                                series.set(items);
+                            }
+                            let next = first_non_complete_volume_selection(&items);
+                            volumes.set(items);
+                            selected_index.set(next);
+                            volumes_selection.set(next);
+                            page.set(Page::Volumes);
+                        }
+                        Ok(_) => show_toast(
+                            &mut status,
+                            &mut toast,
+                            &mut toast_generation,
+                            "No downloaded volumes are ready yet.".into(),
+                        ),
+                        Err(err) => show_toast(
+                            &mut status,
+                            &mut toast,
+                            &mut toast_generation,
+                            format!("Could not open downloads: {err}"),
+                        ),
+                    }
+                }
+                EmberAction::ClearCache => {
+                    if status.peek().offline_mode {
+                        show_toast(
+                            &mut status,
+                            &mut toast,
+                            &mut toast_generation,
+                            "Go online before clearing cached pages and local library data.".into(),
+                        );
+                    } else {
+                        match clear_cache().await {
+                            Ok(()) => {
+                                libraries.set(Vec::new());
+                                series.set(Vec::new());
+                                volumes.set(Vec::new());
+                                home_read.set(None);
+                                downloaded_series.set(Vec::new());
+                                status.set(load_status().await);
+                                show_toast(
+                                    &mut status,
+                                    &mut toast,
+                                    &mut toast_generation,
+                                    "Cache cleared. Reopen your library to refresh its data."
+                                        .into(),
+                                );
+                            }
+                            Err(err) => show_toast(
+                                &mut status,
+                                &mut toast,
+                                &mut toast_generation,
+                                format!("Failed to clear cache: {err}"),
+                            ),
+                        }
+                    }
+                }
+                EmberAction::Update => match update_server_library().await {
+                    Ok(()) => show_toast(
+                        &mut status,
+                        &mut toast,
+                        &mut toast_generation,
+                        "Update requested in Kavita. Your server will refresh its libraries."
+                            .into(),
+                    ),
+                    Err(err) => show_toast(
+                        &mut status,
+                        &mut toast,
+                        &mut toast_generation,
+                        format!("Server library update failed: {err}"),
+                    ),
+                },
+                EmberAction::ToggleOffline => {
+                    let result = toggle_offline().await;
+                    status.set(load_status().await);
+                    let message = match result {
+                        Ok(true) => "Offline mode is active".into(),
+                        Ok(false) => "Connected to Kavita".into(),
+                        Err(err) => format!("Could not reconnect: {err}"),
+                    };
+                    show_toast(&mut status, &mut toast, &mut toast_generation, message);
+                }
+                EmberAction::Connect(creds) => {
+                    connect_settings(creds, status, toast, toast_generation).await
+                }
+                EmberAction::Exit => exit_process(),
+            }
+        });
     };
 
     rsx! {
         style { "{STYLE}" }
+        style { "{ember_ui::STYLE}" }
         div {
             class: "{app_class}",
             "aria-busy": "{busy}",
             tabindex: "0",
-            autofocus: "true",
             onmounted: move |event| {
                 let element = event.data();
                 spawn(async move {
-                    let _ = element.set_focus(true).await;
+                    if !matches!(page(), Page::Dashboard | Page::Settings) {
+                        let _ = element.set_focus(true).await;
+                    }
                     let mut layout = document::eval(include_str!("layout.js"));
                     while let Ok(columns) = layout.recv::<usize>().await {
                         shelf_columns.set(columns.max(1));
@@ -1575,6 +1595,7 @@ fn app() -> Element {
                 });
             },
             onkeydown: move |event| {
+                if matches!(page(), Page::Dashboard | Page::Settings) { return; }
                 if busy() {
                     event.prevent_default();
                     return;
@@ -1671,92 +1692,7 @@ fn app() -> Element {
 
                             let selected = selected_index().min(visible_tile_count(page(), &libraries.read(), &series.read(), &volumes.read()).saturating_sub(1));
                             match page() {
-                                Page::Dashboard => match selected {
-                                    0 => match load_libraries().await {
-                                        Ok(items) => {
-                                            libraries.set(items);
-                                            show_toast(
-                                                &mut status,
-                                                &mut toast,
-                                                &mut toast_generation,
-                                                format!("Loaded {} libraries", libraries.read().len()),
-                                            );
-                                            dashboard_selection.set(selected);
-                                            selected_index.set(0);
-                                            page.set(Page::Libraries);
-                                        }
-                                        Err(err) => show_toast(
-                                            &mut status,
-                                            &mut toast,
-                                            &mut toast_generation,
-                                            format!("Failed to load libraries: {err}"),
-                                        ),
-                                    },
-                                    1 => match clear_cache().await {
-                                        Ok(()) => {
-                                            status.set(load_status().await);
-                                            show_toast(
-                                                &mut status,
-                                                &mut toast,
-                                                &mut toast_generation,
-                                                "Cache cleared".to_string(),
-                                            );
-                                        }
-                                        Err(err) => show_toast(
-                                            &mut status,
-                                            &mut toast,
-                                            &mut toast_generation,
-                                            format!("Failed to clear cache: {err}"),
-                                        ),
-                                    },
-                                    2 => {
-                                        show_toast(
-                                            &mut status,
-                                            &mut toast,
-                                            &mut toast_generation,
-                                            "Updating server library...".to_string(),
-                                        );
-                                        match update_server_library().await {
-                                            Ok(()) => show_toast(
-                                                &mut status,
-                                                &mut toast,
-                                                &mut toast_generation,
-                                                "Server library update requested".to_string(),
-                                            ),
-                                            Err(err) => show_toast(
-                                                &mut status,
-                                                &mut toast,
-                                                &mut toast_generation,
-                                                format!("Server library update failed: {err}"),
-                                            ),
-                                        }
-                                    }
-                                    3 => {
-                                        dashboard_selection.set(selected);
-                                        selected_index.set(0);
-                                        page.set(Page::Settings);
-                                    }
-                                    4 => match toggle_offline().await {
-                                        Ok(_) => {
-                                            status.set(load_status().await);
-                                            let message = status.read().message.clone();
-                                            show_toast(
-                                                &mut status,
-                                                &mut toast,
-                                                &mut toast_generation,
-                                                message,
-                                            );
-                                        }
-                                        Err(err) => show_toast(
-                                            &mut status,
-                                            &mut toast,
-                                            &mut toast_generation,
-                                            format!("Offline toggle failed: {err}"),
-                                        ),
-                                    },
-                                    5 => exit_process(),
-                                    _ => {}
-                                },
+                                Page::Dashboard => {},
                                 Page::Libraries => {
                                     if selected == 0 {
                                         selected_index.set(dashboard_selection());
@@ -1842,20 +1778,7 @@ fn app() -> Element {
                                     }
                                 }
                                 Page::Reader => {}
-                                Page::Settings => match selected {
-                                    0 => connect_settings(
-                                        ConnectionCreds {
-                                            ip: server_ip(), username: username(),
-                                            password: password(), api_key: api_key(),
-                                        },
-                                        status, toast, toast_generation,
-                                    ).await,
-                                    1 => {
-                                        selected_index.set(dashboard_selection());
-                                        page.set(Page::Dashboard);
-                                    }
-                                    _ => {}
-                                },
+                                Page::Settings => {},
                             }
                         }
                         "F1" => {
@@ -2069,130 +1992,16 @@ fn app() -> Element {
                 div { class: "busy-indicator", role: "status", "Loading…" }
             }
             if let Some(message) = toast_snapshot {
-                div { class: "toast", "{message}" }
+                div { class: "toast", role: "status", "aria-live": "polite", "{message}" }
             }
             div { class: "tiles",
                 {
                     match page_snapshot {
-                        Page::Dashboard => rsx! {
-                            div { class: "series-page",
-                                div { class: "series-titlebar",
-                                    div {}
-                                    h1 { "Dashboard" }
-                                    div {}
-                                }
-                                div { class: "dashboard-status", "{status_snapshot.line()}" }
-                                div { class: "series-section",
-                                    h2 { class: "series-section-title", "Actions" }
-                                    div { class: "series-grid",
-                                        div { class: "series-card-wrap",
-                                            button {
-                                                onfocus: move |_| selected_index.set(0),
-                                                "aria-disabled": "{busy}",
-                                                class: if selected_snapshot == 0 { "dashboard-card selected" } else { "dashboard-card" },
-                                                onclick: move |_| {
-                                                    run_ui_action(busy, async move {
-                                                        match load_libraries().await {
-                                                            Ok(items) => {
-                                                                libraries.set(items);
-                                                                show_toast(&mut status, &mut toast, &mut toast_generation, format!("Loaded {} libraries", libraries.read().len()));
-                                                                dashboard_selection.set(0);
-                                                                selected_index.set(0);
-                                                                page.set(Page::Libraries);
-                                                            }
-                                                            Err(err) => show_toast(&mut status, &mut toast, &mut toast_generation, format!("Failed to load libraries: {err}")),
-                                                        }
-
-                                                    });
-                                                },
-                                                div { class: "dashboard-card-title", "Kavita" }
-                                                div { class: "dashboard-card-subtitle", "{status_snapshot.server_ip}" }
-                                            }
-                                        }
-                                        div { class: "series-card-wrap",
-                                            button {
-                                                onfocus: move |_| selected_index.set(1),
-                                                "aria-disabled": "{busy}",
-                                                class: if selected_snapshot == 1 { "dashboard-card selected" } else { "dashboard-card" },
-                                                onclick: move |_| {
-                                                    run_ui_action(busy, async move {
-                                                        match clear_cache().await {
-                                                            Ok(()) => status.set(load_status().await),
-                                                            Err(err) => show_toast(&mut status, &mut toast, &mut toast_generation, format!("Failed to clear cache: {err}")),
-                                                        }
-
-                                                    });
-                                                },
-                                                div { class: "dashboard-card-title", "Clean Cache" }
-                                                div { class: "dashboard-card-subtitle", "{status_snapshot.cache_mb}Mb" }
-                                            }
-                                        }
-                                        div { class: "series-card-wrap",
-                                            button {
-                                                onfocus: move |_| selected_index.set(2),
-                                                "aria-disabled": "{busy}",
-                                                class: if selected_snapshot == 2 { "dashboard-card selected" } else { "dashboard-card" },
-                                                onclick: move |_| {
-                                                    run_ui_action(busy, async move {
-                                                        show_toast(&mut status, &mut toast, &mut toast_generation, "Updating server library...".into());
-                                                        match update_server_library().await {
-                                                            Ok(()) => show_toast(&mut status, &mut toast, &mut toast_generation, "Server library update requested".into()),
-                                                            Err(err) => show_toast(&mut status, &mut toast, &mut toast_generation, format!("Server library update failed: {err}")),
-                                                        }
-
-                                                    });
-                                                },
-                                                div { class: "dashboard-card-title", "Update" }
-                                                div { class: "dashboard-card-subtitle", "Server Kavita" }
-                                            }
-                                        }
-                                        div { class: "series-card-wrap",
-                                            button {
-                                                onfocus: move |_| selected_index.set(3),
-                                                "aria-disabled": "{busy}",
-                                                class: if selected_snapshot == 3 { "dashboard-card selected" } else { "dashboard-card" },
-                                                onclick: move |_| {
-                                                    dashboard_selection.set(3);
-                                                    selected_index.set(0);
-                                                    page.set(Page::Settings);
-                                                },
-                                                div { class: "dashboard-card-title", "Settings" }
-                                                div { class: "dashboard-card-subtitle", "Configure connection" }
-                                            }
-                                        }
-                                        div { class: "series-card-wrap",
-                                            button {
-                                                onfocus: move |_| selected_index.set(4),
-                                                "aria-disabled": "{busy}",
-                                                class: if selected_snapshot == 4 { "dashboard-card selected" } else { "dashboard-card" },
-                                                onclick: move |_| {
-                                                    run_ui_action(busy, async move {
-                                                        match toggle_offline().await {
-                                                            Ok(_) => status.set(load_status().await),
-                                                            Err(err) => {
-                                            status.set(load_status().await);
-                                            show_toast(&mut status, &mut toast, &mut toast_generation, format!("Offline toggle failed: {err}"));
-                                        },
-                                                        }
-
-                                                    });
-                                                },
-                                                div { class: "dashboard-card-title", if status_snapshot.offline_mode { "Offline" } else { "Online" } }
-                                                div { class: "dashboard-card-subtitle", if status_snapshot.offline_mode { "Switch to online" } else { "Switch to offline" } }
-                                            }
-                                        }
-                                        div { class: "series-card-wrap",
-                                            button {
-                                                onfocus: move |_| selected_index.set(5),
-                                                "aria-disabled": "{busy}",
-                                                class: if selected_snapshot == 5 { "dashboard-card selected" } else { "dashboard-card" },
-                                                onclick: move |_| exit_process(),
-                                                div { class: "dashboard-card-title", "Exit" }
-                                                div { class: "dashboard-card-subtitle", "Close app" }
-                                            }
-                                        }
-                                    }
-                                }
+                        Page::Dashboard | Page::Settings => rsx! {
+                            EmberScreen {
+                                page: page_snapshot, status: status_snapshot.clone(), busy: busy(),
+                                reading: home_read.read().clone(), reading_loading: home_loading(),
+                                downloads: downloaded_series.read().clone(), onaction: on_ember_action,
                             }
                         },
                         Page::Libraries => rsx! {
@@ -2689,123 +2498,6 @@ fn app() -> Element {
                                 }
                             }
                         },
-                        Page::Settings => rsx! {
-                            section { class: "settings-page", "aria-labelledby": "settings-title",
-                                header { class: "settings-header",
-                                    div {
-                                        h1 { id: "settings-title", "Settings" }
-                                        p { class: "settings-description", "Manage your Kavita connection." }
-                                    }
-                                    div {
-                                        class: if status_snapshot.offline_mode { "settings-connection offline" } else { "settings-connection" },
-                                        role: "status",
-                                        "aria-live": "polite",
-                                        span { class: "settings-connection-dot", "aria-hidden": "true" }
-                                        if status_snapshot.offline_mode { "Offline" } else { "Connected" }
-                                    }
-                                }
-                                form {
-                                    class: "settings-card",
-                                    onsubmit: move |event| {
-                                        event.prevent_default();
-                                        let creds = ConnectionCreds {
-                                            ip: server_ip(), username: username(),
-                                            password: password(), api_key: api_key(),
-                                        };
-                                        run_ui_action(busy, connect_settings(creds, status, toast, toast_generation));
-                                    },
-                                    div { class: "settings-card-header",
-                                        h2 { "Kavita server" }
-                                        p { class: "settings-account",
-                                            if status_snapshot.offline_mode {
-                                                "Enter your server details to connect."
-                                            } else if !status_snapshot.logged_as.is_empty() {
-                                                "Signed in as {status_snapshot.logged_as}"
-                                            } else {
-                                                "Your library connection settings."
-                                            }
-                                        }
-                                    }
-                                    div { class: "settings-fields",
-                                        div { class: "settings-field",
-                                            label { r#for: "settings-server", "Server address" }
-                                            input {
-                                                id: "settings-server", class: "settings-input",
-                                                r#type: "text", name: "server",
-                                                "aria-describedby": "settings-server-hint",
-                                                readonly: busy(),
-                                                onkeydown: move |event| event.stop_propagation(),
-                                                value: "{server_ip.read()}",
-                                                placeholder: "192.168.1.100:5000",
-                                                autocomplete: "off", spellcheck: "false",
-                                                oninput: move |event| server_ip.set(event.value()),
-                                            }
-                                            p { id: "settings-server-hint", class: "settings-hint", "Use host:port, without http://." }
-                                        }
-                                        div { class: "settings-field",
-                                            label { r#for: "settings-username", "Username" }
-                                            input {
-                                                id: "settings-username", class: "settings-input",
-                                                r#type: "text", name: "username", autocomplete: "username",
-                                                readonly: busy(), spellcheck: "false",
-                                                onkeydown: move |event| event.stop_propagation(),
-                                                value: "{username.read()}", placeholder: "Your Kavita username",
-                                                oninput: move |event| username.set(event.value()),
-                                            }
-                                        }
-                                        div { class: "settings-field",
-                                            label { r#for: "settings-password", "Password" }
-                                            input {
-                                                id: "settings-password", class: "settings-input",
-                                                r#type: "password", name: "password", autocomplete: "current-password",
-                                                "aria-describedby": "settings-credential-note",
-                                                readonly: busy(),
-                                                onkeydown: move |event| event.stop_propagation(),
-                                                value: "{password.read()}", placeholder: "Enter a new password",
-                                                oninput: move |event| password.set(event.value()),
-                                            }
-                                        }
-                                        div { class: "settings-field",
-                                            label { r#for: "settings-api-key", "API key" }
-                                            input {
-                                                id: "settings-api-key", class: "settings-input",
-                                                r#type: "password", name: "api_key", autocomplete: "off",
-                                                "aria-describedby": "settings-credential-note",
-                                                readonly: busy(),
-                                                onkeydown: move |event| event.stop_propagation(),
-                                                value: "{api_key.read()}", placeholder: "Enter a new API key",
-                                                oninput: move |event| api_key.set(event.value()),
-                                            }
-                                        }
-                                    }
-                                    p { id: "settings-credential-note", class: "settings-credential-note",
-                                        "Leave Password and API key blank to keep your saved credentials."
-                                    }
-                                    div { class: "settings-actions",
-                                        button {
-                                            r#type: "submit",
-                                            onfocus: move |_| selected_index.set(0),
-                                            "aria-disabled": "{busy}",
-                                            class: if selected_snapshot == 0 { "settings-button settings-save selected" } else { "settings-button settings-save" },
-                                            if busy() { "Connecting…" } else { "Save & connect" }
-                                        }
-                                        button {
-                                            r#type: "button",
-                                            onfocus: move |_| selected_index.set(1),
-                                            "aria-disabled": "{busy}",
-                                            class: if selected_snapshot == 1 { "settings-button selected" } else { "settings-button" },
-                                            onclick: move |_| {
-                                                if !busy() {
-                                                    selected_index.set(dashboard_selection());
-                                                    page.set(Page::Dashboard);
-                                                }
-                                            },
-                                            "Back to dashboard"
-                                        }
-                                    }
-                                }
-                            }
-                        },
                     }
                 }
             }
@@ -2817,12 +2509,19 @@ pub fn run_ui(kavita: SharedKavita) {
     let _ = KAVITA.set(kavita);
     let window = WindowBuilder::new()
         .with_title("Manga4Deck")
-        .with_inner_size(LogicalSize::new(1280.0, 720.0))
+        .with_inner_size(LogicalSize::new(1280.0, 800.0))
         .with_always_on_top(false);
     #[cfg(target_os = "linux")]
     let window = window.with_decorations(false);
 
-    let config = Config::new().with_window(window);
+    // Embed the font once in the native document. This also supports `cargo run`
+    // and standalone binaries without a separate asset bundling step.
+    let inter = base64::engine::general_purpose::STANDARD
+        .encode(include_bytes!("../assets/InterVariable.woff2"));
+    let head = format!(
+        "<style>@font-face {{ font-family: Inter; src: url(data:font/woff2;base64,{inter}) format('woff2'); font-weight: 100 900; font-display: swap; }}</style>"
+    );
+    let config = Config::new().with_window(window).with_custom_head(head);
     #[cfg(not(target_os = "macos"))]
     let config = config.with_menu(None);
 
