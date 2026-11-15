@@ -2,7 +2,7 @@
 
 A manga, manhwa, and PDF reader for Steam Deck and self-hosted Kavita servers, built with Rust and Dioxus.
 
-- Library and chapter shelves
+- Horizontal library gallery and volume shelves
 - Scrolling reader with a page slider
 - Offline reading and progress sync
 
@@ -36,11 +36,15 @@ Map Steam Deck buttons to these keys:
 
 The first Left or Right press opens the slider; subsequent presses change the page. You can also tap the page counter and drag the slider. It hides after five seconds of inactivity.
 
-F2 starts a series download, stops an active download, or removes a fully cached series. It works from the series shelf, volume shelf, and reader.
+F2 starts a series download, stops an active download, or removes a fully cached series. It works from the library gallery, volume shelf, and reader.
 
-Home and Settings also support standard gamepads directly: the D-pad or left stick moves focus, A opens, B goes back, X opens Downloads, and Y opens Connection from Settings. With a keyboard, use arrows and Enter/Space, Esc to go back, X for Downloads, and S for Settings. Text fields keep their normal editing keys.
+Home, Library, and Settings also support standard gamepads directly: the D-pad or left stick moves focus, A opens or applies a filter, B goes back, X opens Downloads, and Y opens Connection from Settings. On a focused library title, X manages its download. With a keyboard, use arrows and Enter/Space, Esc to go back, X for Downloads, and S for Settings. Text fields keep their normal editing keys.
 
-Home shows your most recent volume and resumes at your saved page. Settings contains connection status, cache cleanup, server updates, connection details, online/offline mode, and Exit.
+Libraries open with **Unread**, which includes unstarted and partially read series. Switch to **All series**, **Downloaded**, or **Completed** as needed. The series count appears beside **Your library**. Narrow portrait cards show progress below covers: blue for partial progress, green for completed series. Long titles scroll like a bus display when focused or hovered; reduced-motion mode shows wrapped titles. Left/Right browses the full title row; Up moves from titles to filters and then to navigation tabs. Extra titles scroll into view, and your filter and title selection are restored when returning from a volume.
+
+Series sort newest to oldest by when Kavita last added content to them. Dates refresh when you open a library online and are cached for offline browsing. Series without a date appear last; equal dates sort by title. Reading progress does not change this order.
+
+Home shows your most recent volume and a horizontal row of your Kavita libraries. Use Left/Right or the scroll arrows to browse folders, then A/Enter to open one. Back returns to the selected folder on Home. Settings contains connection status, cache cleanup, server updates, connection details, online/offline mode, and Exit.
 
 ## Offline reading
 

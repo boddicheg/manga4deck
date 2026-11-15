@@ -32,9 +32,21 @@ impl Database {
             [],
         )?;
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS series (id INTEGER PRIMARY KEY, library_id INTEGER, title TEXT, read INTEGER, pages INTEGER)",
+            "CREATE TABLE IF NOT EXISTS series (id INTEGER PRIMARY KEY, library_id INTEGER, title TEXT, read INTEGER, pages INTEGER, last_updated TEXT)",
             [],
         )?;
+        // Upgrade existing caches without removing saved progress or downloads.
+        let has_update_date = {
+            let mut stmt = conn.prepare("PRAGMA table_info(series)")?;
+            let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+            columns
+                .collect::<Result<Vec<_>>>()?
+                .iter()
+                .any(|name| name == "last_updated")
+        };
+        if !has_update_date {
+            conn.execute("ALTER TABLE series ADD COLUMN last_updated TEXT", [])?;
+        }
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS series_cover (series_id INTEGER PRIMARY KEY, file TEXT)",
@@ -143,8 +155,12 @@ impl Database {
     // Series methods
     pub fn get_series(&self, library_id: &i32) -> Result<Vec<Series>, Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT id, title, read, pages FROM series WHERE library_id = ?")?;
+        // Parse dates instead of comparing text: UTC offsets and fractional
+        // seconds may differ. Unknown/invalid dates sort after dated series.
+        let mut stmt = conn.prepare(
+            "SELECT id, title, read, pages, last_updated FROM series WHERE library_id = ?
+             ORDER BY julianday(last_updated) DESC, title COLLATE NOCASE ASC, id ASC",
+        )?;
         let series = stmt.query_map([library_id.to_string()], |row| {
             Ok(Series {
                 id: row.get(0)?,
@@ -153,6 +169,7 @@ impl Database {
                 pages: row.get(3)?,
                 library_id: library_id.clone(),
                 is_cached: false,
+                last_updated: row.get(4)?,
             })
         })?;
         Ok(series.collect::<Result<Vec<Series>, rusqlite::Error>>()?)
@@ -179,24 +196,26 @@ impl Database {
         let key_str: i32 = stmt.query_row([series.id.to_string()], |row| row.get(0))?;
         if key_str == 0 {
             conn.execute(
-                "INSERT INTO series (id, library_id, title, read, pages) VALUES (?, ?, ?, ?, ?)",
-                [
-                    series.id.to_string(),
-                    series.library_id.to_string(),
-                    series.title.to_string(),
-                    series.read.to_string(),
-                    series.pages.to_string(),
+                "INSERT INTO series (id, library_id, title, read, pages, last_updated) VALUES (?, ?, ?, ?, ?, ?)",
+                rusqlite::params![
+                    series.id,
+                    series.library_id,
+                    series.title,
+                    series.read,
+                    series.pages,
+                    series.last_updated,
                 ],
             )?;
         } else {
-            // Update existing series with new progress and title
+            // Refresh the server timestamp along with metadata and progress.
             conn.execute(
-                "UPDATE series SET title = ?, read = ?, pages = ? WHERE id = ?",
-                [
-                    series.title.to_string(),
-                    series.read.to_string(),
-                    series.pages.to_string(),
-                    series.id.to_string(),
+                "UPDATE series SET title = ?, read = ?, pages = ?, last_updated = ? WHERE id = ?",
+                rusqlite::params![
+                    series.title,
+                    series.read,
+                    series.pages,
+                    series.last_updated,
+                    series.id,
                 ],
             )?;
         }

@@ -308,7 +308,7 @@ pub struct ConnectionCreds {
     pub api_key: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Library {
     pub id: i32,
     pub title: String,
@@ -322,6 +322,20 @@ pub struct Series {
     pub read: i32,
     pub pages: i32,
     pub is_cached: bool,
+    /// Server timestamp for the latest content addition (not reading activity).
+    #[serde(default)]
+    pub last_updated: Option<String>,
+}
+
+fn series_last_updated(series: &serde_json::Value) -> Option<String> {
+    // Current Kavita exposes UTC; older releases expose the server-local date.
+    // .NET's default DateTime means the date is unknown.
+    ["lastChapterAddedUtc", "lastChapterAdded"]
+        .into_iter()
+        .filter_map(|field| series[field].as_str())
+        .map(str::trim)
+        .find(|date| !date.is_empty() && !date.starts_with("0001-"))
+        .map(str::to_owned)
 }
 
 #[derive(Clone)]
@@ -662,6 +676,7 @@ impl Kavita {
                     },
                     pages: v["pages"].as_i64().unwrap_or(0) as i32,
                     is_cached: false,
+                    last_updated: series_last_updated(v),
                 })
                 .collect();
             for series in series {
@@ -690,8 +705,7 @@ impl Kavita {
                 .filter(|s| self.is_series_cached(s.id))
                 .collect();
         }
-        // sort series by title and return sorted series
-        series.sort_by_key(|s| s.title.clone());
+        // The database orders by the cached server update date, including offline.
         Ok(series)
     }
 

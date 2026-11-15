@@ -1,10 +1,33 @@
-//! The EMBER Home and Settings views. Library shelves and the reader retain their own UI.
+//! EMBER Home, library and Settings views. Volume selection and the reader retain their own UI.
+use std::sync::LazyLock;
+
+use base64::Engine;
 use dioxus::prelude::*;
 
 use super::{Page, UiStatus};
-use crate::kavita::{ConnectionCreds, Series, Volume};
+use crate::kavita::{ConnectionCreds, Library, Series, Volume};
 
 pub(super) const STYLE: &str = include_str!("ember.css");
+
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(super) enum SeriesFilter {
+    #[default]
+    Unread,
+    All,
+    Downloaded,
+    Completed,
+}
+
+impl SeriesFilter {
+    fn includes(self, series: &Series) -> bool {
+        match self {
+            Self::Unread => series.read < 100,
+            Self::All => true,
+            Self::Downloaded => series.is_cached,
+            Self::Completed => series.read >= 100,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct HomeRead {
@@ -17,6 +40,10 @@ pub(super) struct HomeRead {
 pub(super) enum EmberAction {
     Home,
     Library,
+    OpenLibrary(Library),
+    OpenSeries(Series),
+    BackFromLibrary,
+    RefreshLibraries,
     Settings,
     Resume(HomeRead),
     OpenDownload(Series),
@@ -48,6 +75,15 @@ pub(super) fn EmberScreen(
     reading: Option<HomeRead>,
     reading_loading: bool,
     downloads: Vec<Series>,
+    library_folders: Vec<Library>,
+    libraries_loading: bool,
+    libraries_error: bool,
+    focused_library: Option<i32>,
+    series_items: Vec<Series>,
+    focused_series: Option<i32>,
+    series_filter: SeriesFilter,
+    onfilter: EventHandler<SeriesFilter>,
+    onseriesfocus: EventHandler<i32>,
     onaction: EventHandler<EmberAction>,
 ) -> Element {
     let mut view = use_signal(|| View::Main);
@@ -57,13 +93,20 @@ pub(super) fn EmberScreen(
     let mut password = use_signal(String::new);
     let mut api_key = use_signal(String::new);
     let settings = page == Page::Settings;
+    let library = page == Page::Series;
     let main = view() == View::Main;
     let connection = view() == View::Connection;
     let showing_downloads = view() == View::Downloads;
+    let series_count = series_items
+        .iter()
+        .filter(|s| series_filter.includes(s))
+        .count();
     let title = if connection {
         "Connection settings"
     } else if showing_downloads {
         "Downloads"
+    } else if library {
+        "Your library"
     } else if settings {
         "Settings"
     } else {
@@ -91,7 +134,10 @@ pub(super) fn EmberScreen(
             class: "ember-screen",
             "data-ember-view": "{title}",
             "aria-busy": busy,
-            onkeydown: move |event| event.stop_propagation(),
+            onkeydown: move |event| {
+                // F2 keeps using the existing series download command in the app.
+                if !(library && event.key().to_string() == "F2") { event.stop_propagation(); }
+            },
             onmounted: move |_| {
                 spawn(async move {
                     let _ = document::eval(include_str!("ember.js")).await;
@@ -104,7 +150,7 @@ pub(super) fn EmberScreen(
                         button {
                             r#type: "button",
                             class: "ember-nav-item",
-                            "aria-current": if (index == 0 && !settings && !showing_downloads) || (index == 3 && settings && !showing_downloads) || (index == 2 && showing_downloads) { "page" } else { "false" },
+                            "aria-current": if (index == 0 && !settings && !library && !showing_downloads) || (index == 1 && library && !showing_downloads) || (index == 3 && settings && !showing_downloads) || (index == 2 && showing_downloads) { "page" } else { "false" },
                             "data-nav": "{index}",
                             "data-focus-row": "0", "data-focus-col": "{index}",
                             disabled: busy,
@@ -125,14 +171,22 @@ pub(super) fn EmberScreen(
                     }
                 }
                 div { class: "ember-connection",
-                    if settings || showing_downloads {
-                        span { class: "ember-status-dot", "aria-hidden": "true" }
+                    if settings || library || showing_downloads {
+                        if library { img { class: "ember-status-dot", src: ONLINE_ICON.as_str(), width: "8", height: "8", alt: "", "aria-hidden": "true" } }
+                        else { span { class: "ember-status-dot", "aria-hidden": "true" } }
                         if status.offline_mode { "Offline mode" } else if status.logged_as.is_empty() { "Not signed in" } else { "Kavita online" }
                     }
                 }
             }
             main { class: "ember-content", "aria-labelledby": "ember-title",
-                h1 { id: "ember-title", "{title}" }
+                if library && main {
+                    div { class: "ember-series-heading",
+                        h1 { id: "ember-title", "{title}" }
+                        span { class: "ember-series-count", "aria-live": "polite", "{series_count} series" }
+                    }
+                } else {
+                    h1 { id: "ember-title", "{title}" }
+                }
                 if showing_downloads {
                     if downloads.is_empty() {
                         section { class: "ember-empty",
@@ -222,6 +276,8 @@ pub(super) fn EmberScreen(
                             }
                         }
                     }
+                } else if library {
+                    LibrarySeries { items: series_items, focused_series, series_filter, busy, onfilter, onseriesfocus, onaction }
                 } else if settings {
                     section { class: "ember-status", role: "status", "aria-live": "polite",
                         strong { class: if status.offline_mode || status.logged_as.is_empty() { "" } else { "ember-online" }, "{account}" }
@@ -275,13 +331,30 @@ pub(super) fn EmberScreen(
                             }
                         }
                     }
+                    HomeLibraries {
+                        folders: library_folders, busy, loading: libraries_loading, error: libraries_error,
+                        focused_library, onaction,
+                    }
                 }
             }
             footer { class: "ember-footer", "aria-label": "Controller shortcuts",
                 div { class: "ember-hints",
-                    for (key, label) in [("↕", "Move"), ("A", "Open"), ("B", "Back"), (if settings && main { "Y" } else { "X" }, if settings && main { "Connection" } else { "Downloads" })] {
-                        span { class: "ember-hint", kbd { "{key}" } span { "{label}" } }
-                    }
+                    if library && main {
+                        span { class: "ember-hint", kbd { "↔" } span { span { class: "ember-series-filter-hint", "Filters" } span { class: "ember-series-card-hint", "Browse" } } }
+                        span { class: "ember-hint", kbd { "A" } span { span { class: "ember-series-filter-hint", "Apply" } span { class: "ember-series-card-hint", "Open" } } }
+                        span { class: "ember-hint", kbd { "B" } span { "Back" } }
+                        span { class: "ember-hint",
+                            kbd { span { class: "ember-series-filter-hint", "↑" } span { class: "ember-series-card-hint", "X" } }
+                            span { span { class: "ember-series-filter-hint", "Tabs" } span { class: "ember-series-card-hint", "Download" } }
+                        }
+                    } else { for (key, label) in [("↕", "Move"), ("A", "Open"), ("B", "Back"), (if settings && main { "Y" } else { "X" }, if settings && main { "Connection" } else { "Downloads" })] {
+                        span { class: "ember-hint",
+                            if key == "↕" {
+                                kbd { span { class: "ember-move-label", "↕" } span { class: "ember-browse-label", "↔" } }
+                                span { span { class: "ember-move-label", "Move" } span { class: "ember-browse-label", "Browse" } }
+                            } else { kbd { "{key}" } span { "{label}" } }
+                        }
+                    } }
                 }
                 span { class: "ember-keyboard-hint", "Enter / Esc" }
             }
@@ -351,6 +424,217 @@ fn HomeProgress(read: HomeRead, busy: bool, onaction: EventHandler<EmberAction>)
                 "data-autofocus": "true", "data-focus-row": "1", "data-focus-col": "0",
                 onclick: move |_| onaction.call(EmberAction::Resume(read.clone())),
                 "Keep reading"
+            }
+        }
+    }
+}
+
+fn svg_data(bytes: &[u8]) -> String {
+    format!(
+        "data:image/svg+xml;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    )
+}
+static FOLDER_ICON: LazyLock<String> =
+    LazyLock::new(|| svg_data(include_bytes!("../assets/ember-folder.svg")));
+static PREVIOUS_ICON: LazyLock<String> =
+    LazyLock::new(|| svg_data(include_bytes!("../assets/ember-chevron-left.svg")));
+static NEXT_ICON: LazyLock<String> =
+    LazyLock::new(|| svg_data(include_bytes!("../assets/ember-chevron-right.svg")));
+
+#[component]
+fn HomeLibraries(
+    folders: Vec<Library>,
+    busy: bool,
+    loading: bool,
+    error: bool,
+    focused_library: Option<i32>,
+    onaction: EventHandler<EmberAction>,
+) -> Element {
+    let preferred = focused_library
+        .filter(|id| folders.iter().any(|f| f.id == *id))
+        .or_else(|| folders.first().map(|f| f.id));
+    let count = folders.len();
+    rsx! {
+        section { class: "ember-home-libraries", "aria-labelledby": "ember-libraries-title",
+            header { class: "ember-library-heading",
+                div { class: "ember-library-heading-copy",
+                    h2 { id: "ember-libraries-title", "Your libraries" }
+                    span { class: "ember-library-count", "aria-live": "polite",
+                        if loading && count == 0 { "Loading…" }
+                        else if count == 1 { "1 folder" }
+                        else { "{count} folders" }
+                    }
+                }
+                if count > 0 {
+                    div { class: "ember-carousel-arrows",
+                        for (direction, label, icon) in [("previous", "Previous folders", PREVIOUS_ICON.as_str()), ("next", "Next folders", NEXT_ICON.as_str())] {
+                            button {
+                                class: "ember-carousel-arrow", r#type: "button", disabled: busy,
+                                "aria-label": label, "aria-controls": "ember-library-rail", "data-library-scroll": direction,
+                                img { src: icon, width: "24", height: "24", alt: "", "aria-hidden": "true" }
+                            }
+                        }
+                    }
+                }
+            }
+            if count > 0 {
+                div { id: "ember-library-rail", class: "ember-library-carousel", role: "group", "aria-label": "Library folders",
+                    for folder in folders {
+                        button {
+                            key: "{folder.id}", class: "ember-folder", r#type: "button", disabled: busy,
+                            "data-library-id": "{folder.id}", "data-autofocus": if Some(folder.id) == preferred { "true" } else { "false" },
+                            "aria-label": "Open {folder.title} library", title: "{folder.title}",
+                            onclick: move |_| onaction.call(EmberAction::OpenLibrary(folder.clone())),
+                            img { class: "ember-folder-icon", src: FOLDER_ICON.as_str(), width: "40", height: "40", alt: "", "aria-hidden": "true" }
+                            div { class: "ember-folder-labels",
+                                strong { "{folder.title}" }
+                                span { "Open library" }
+                            }
+                        }
+                    }
+                }
+                p { class: "ember-carousel-hint", "Left / Right to browse · A to open" }
+            } else if loading {
+                p { class: "ember-library-placeholder", role: "status", "Loading your libraries…" }
+            } else if !error {
+                p { class: "ember-library-placeholder", "Your Kavita libraries will appear here." }
+            }
+            if error {
+                div { class: "ember-library-error", role: "status",
+                    p { if count > 0 { "Could not refresh libraries. Showing saved folders." } else { "Could not load libraries. Check your connection and try again." } }
+                    button {
+                        class: "ember-secondary", r#type: "button", disabled: busy || loading,
+                        onclick: move |_| onaction.call(EmberAction::RefreshLibraries), "Retry"
+                    }
+                }
+            }
+        }
+    }
+}
+
+static ONLINE_ICON: LazyLock<String> =
+    LazyLock::new(|| svg_data(include_bytes!("../assets/ember-online.svg")));
+
+#[component]
+fn LibrarySeries(
+    items: Vec<Series>,
+    focused_series: Option<i32>,
+    series_filter: SeriesFilter,
+    busy: bool,
+    onfilter: EventHandler<SeriesFilter>,
+    onseriesfocus: EventHandler<i32>,
+    onaction: EventHandler<EmberAction>,
+) -> Element {
+    let empty_library = items.is_empty();
+    let visible: Vec<_> = items
+        .into_iter()
+        .filter(|s| series_filter.includes(s))
+        .collect();
+    let count = visible.len();
+    let preferred = focused_series.filter(|id| visible.iter().any(|s| s.id == *id));
+    rsx! {
+        section { class: "ember-series-library", "aria-label": "Series in this library",
+            div { class: "ember-series-filters", role: "group", "aria-label": "Filter series",
+                for (filter, value, label) in [
+                    (SeriesFilter::Unread, "unread", "Unread"),
+                    (SeriesFilter::All, "all", "All series"),
+                    (SeriesFilter::Downloaded, "downloaded", "Downloaded"),
+                    (SeriesFilter::Completed, "completed", "Completed"),
+                ] {
+                    button {
+                        class: "ember-series-filter", r#type: "button", disabled: busy,
+                        "aria-pressed": series_filter == filter,
+                        "data-series-filter": value,
+                        "data-autofocus": if preferred.is_none() && series_filter == filter { "true" } else { "false" },
+                        onclick: move |_| onfilter.call(filter), "{label}"
+                    }
+                }
+                if count > 3 {
+                    div { class: "ember-series-scroll-controls",
+                        for (direction, label, icon) in [("previous", "Previous titles", PREVIOUS_ICON.as_str()), ("next", "Next titles", NEXT_ICON.as_str())] {
+                            button { class: "ember-carousel-arrow", r#type: "button", disabled: busy,
+                                "data-library-scroll": direction, "aria-label": label, "aria-controls": "ember-series-rail",
+                                img { src: icon, width: "24", height: "24", alt: "", "aria-hidden": "true" }
+                            }
+                        }
+                    }
+                }
+            }
+            if count == 0 {
+                div { class: "ember-empty", role: "status",
+                    h2 {
+                        if empty_library { "This library is empty." }
+                        else { match series_filter {
+                            SeriesFilter::Unread => "No unread series.",
+                            SeriesFilter::Completed => "No completed series yet.",
+                            SeriesFilter::Downloaded => "No downloaded series yet.",
+                            SeriesFilter::All => "This library is empty.",
+                        } }
+                    }
+                    p {
+                        if empty_library { "Add titles in Kavita, then reopen this library." }
+                        else { match series_filter {
+                            SeriesFilter::Unread => "You’re up to date with every series in this library.",
+                            SeriesFilter::Completed => "Finish reading a series to find it here.",
+                            SeriesFilter::Downloaded => "Download a series to read it offline.",
+                            SeriesFilter::All => "Add titles in Kavita, then reopen this library.",
+                        } }
+                    }
+                    if !empty_library && series_filter != SeriesFilter::All {
+                        button { class: "ember-secondary", r#type: "button", disabled: busy, onclick: move |_| onfilter.call(SeriesFilter::All), "Show all series" }
+                    }
+                }
+            } else {
+                div { id: "ember-series-rail", class: "ember-library-carousel ember-series-carousel", role: "group", "aria-label": "Series",
+                    for item in visible {
+                        LibrarySeriesCard { key: "{item.id}", preferred: Some(item.id) == preferred, item, busy, onseriesfocus, onaction }
+                    }
+                }
+            }
+            button { class: "ember-series-back", hidden: true, r#type: "button", onclick: move |_| onaction.call(EmberAction::BackFromLibrary), "Back" }
+        }
+    }
+}
+
+#[component]
+fn LibrarySeriesCard(
+    item: Series,
+    preferred: bool,
+    busy: bool,
+    onseriesfocus: EventHandler<i32>,
+    onaction: EventHandler<EmberAction>,
+) -> Element {
+    let mut failed = use_signal(|| false);
+    let cover = crate::local_api::media_url(&format!("series-cover/{}", item.id));
+    let id = item.id;
+    let open_item = item.clone();
+    let progress = item.read.clamp(0, 100);
+    rsx! {
+        button {
+            class: "ember-series-card", r#type: "button", disabled: busy, title: "{item.title}",
+            "aria-label": "Open {item.title}, {progress}% read", "data-series-id": "{id}",
+            "data-autofocus": if preferred { "true" } else { "false" },
+            onfocus: move |_| onseriesfocus.call(id),
+            onclick: move |_| onaction.call(EmberAction::OpenSeries(open_item.clone())),
+            div { class: "ember-series-art",
+                if failed() { span { "Cover unavailable" } }
+                else { img { src: cover, alt: "{item.title} cover", width: "228", height: "304", loading: "lazy", onerror: move |_| failed.set(true) } }
+            }
+            div {
+                class: "ember-series-progress", role: "progressbar",
+                "aria-label": "{item.title} reading progress",
+                "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": "{progress}",
+                "aria-valuetext": if progress == 100 { "Completed".to_string() } else { format!("{progress}% read") },
+                div { class: "ember-series-progress-fill", "data-completed": progress == 100, style: "width: {progress}%;" }
+            }
+            div { class: "ember-series-info",
+                strong { class: "ember-series-title",
+                    span { class: "ember-series-title-track",
+                        span { class: "ember-series-title-text", "{item.title}" }
+                        span { class: "ember-series-title-copy", "aria-hidden": "true", "{item.title}" }
+                    }
+                }
             }
         }
     }
