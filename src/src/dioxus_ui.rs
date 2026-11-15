@@ -2822,6 +2822,7 @@ pub fn run_ui(kavita: SharedKavita) {
     #[cfg(target_os = "linux")]
     let window = window.with_decorations(false);
 
+    // macOS routes standard clipboard shortcuts through the native Edit menu.
     let config = Config::new().with_window(window);
     #[cfg(not(target_os = "macos"))]
     let config = config.with_menu(None);

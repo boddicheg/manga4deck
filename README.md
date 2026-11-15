@@ -64,3 +64,93 @@ The app uses authenticated local services on `127.0.0.1:11337` (HTTP) and `127.0
 ![Series shelf](images/2.png)
 
 ![Reader](images/3.png)
+
+## Features
+
+- Steam Deck friendly shelf UI
+- Kavita library, series, volume, and page browsing
+- Offline/cache-aware volume and series state
+- Cover thumbnails cached as small JPEGs for faster shelf loading
+- Reader with batch page loading
+- PDF books displayed as page images in the same scrolling reader, with progress and offline caching
+- Keyboard and Steam Deck controller friendly navigation
+
+## Controls
+
+Recommended Steam Deck keyboard mappings:
+
+| Action | Key |
+| --- | --- |
+| Activate selected tile | Enter |
+| Go back | Backspace |
+| Move selection on shelves | Arrow keys |
+| Scroll reader | Up / Down |
+| Show and move reader page slider | Left / Right |
+
+Reader behavior:
+
+- Up and Down scroll the page.
+- First Left or Right press shows the page slider.
+- While the slider is visible, Left and Right change the selected page.
+- The slider hides 5 seconds after the last Left or Right press.
+
+## Development
+
+### Requirements
+
+- Rust and Cargo
+- Node.js LTS and npm
+- Linux packages required by the native UI stack, for example on Ubuntu:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  build-essential \
+  libayatana-appindicator3-dev \
+  librsvg2-dev \
+  libssl-dev \
+  libwebkit2gtk-4.1-dev \
+  libxdo-dev \
+  patchelf \
+  pkg-config
+```
+
+### Install dependencies
+
+```bash
+npm ci
+```
+
+### Run Manga4Deck
+
+```bash
+npm run manga4deck
+```
+
+This starts the Rust backend HTTP API and launches the native Manga4Deck UI.
+
+### Build/check
+
+Check the Manga4Deck build:
+
+```bash
+cargo check --manifest-path src/Cargo.toml
+```
+
+Build the Manga4Deck binary:
+
+```bash
+cargo build --manifest-path src/Cargo.toml
+```
+
+## Kavita
+
+Manga4Deck expects access to a Kavita server. Server IP, username/password, and API key are stored by the app settings UI.
+
+PDF pages are rendered by Kavita using its reader image API (`extractPdf=true`) and cached locally like manga pages. Your Kavita version must support this option. The first page can take longer while the server renders the book. No local PDF renderer is needed. Cache a series before disconnecting to read its PDF pages offline.
+
+The local backend listens on:
+
+```text
+0.0.0.0:11337
+```
