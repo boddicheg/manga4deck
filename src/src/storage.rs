@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex};
 
 // Removed unused import
 
-use crate::kavita::{Library, MangaPicture, Series, SeriesCover, Volume, VolumeCover};
+use crate::kavita::{
+    Library, MangaPicture, Series, SeriesCover, SeriesMetadata, Volume, VolumeCover,
+};
 
 pub(crate) fn valid_picture_file(path: &str) -> bool {
     image::ImageReader::open(path)
@@ -32,7 +34,23 @@ impl Database {
             [],
         )?;
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS series (id INTEGER PRIMARY KEY, library_id INTEGER, title TEXT, read INTEGER, pages INTEGER)",
+            "CREATE TABLE IF NOT EXISTS series (id INTEGER PRIMARY KEY, library_id INTEGER, title TEXT, read INTEGER, pages INTEGER, last_updated TEXT)",
+            [],
+        )?;
+        // Upgrade existing caches without removing saved progress or downloads.
+        let has_update_date = {
+            let mut stmt = conn.prepare("PRAGMA table_info(series)")?;
+            let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+            columns
+                .collect::<Result<Vec<_>>>()?
+                .iter()
+                .any(|name| name == "last_updated")
+        };
+        if !has_update_date {
+            conn.execute("ALTER TABLE series ADD COLUMN last_updated TEXT", [])?;
+        }
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS series_metadata (series_id INTEGER PRIMARY KEY, data TEXT NOT NULL)",
             [],
         )?;
 
@@ -102,6 +120,7 @@ impl Database {
         // conn.execute("DELETE FROM settings", [])?;
         conn.execute("DELETE FROM libraries", [])?;
         conn.execute("DELETE FROM series", [])?;
+        conn.execute("DELETE FROM series_metadata", [])?;
         conn.execute("DELETE FROM series_cover", [])?;
         conn.execute("DELETE FROM volumes", [])?;
         conn.execute("DELETE FROM volumes_cover", [])?;
@@ -141,10 +160,40 @@ impl Database {
     }
     // -------------------------------------------------------------------------
     // Series methods
+    pub fn save_series_metadata(
+        &self,
+        series_id: i32,
+        metadata: &SeriesMetadata,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let data = serde_json::to_string(metadata)?;
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO series_metadata (series_id, data) VALUES (?, ?) ON CONFLICT(series_id) DO UPDATE SET data = excluded.data",
+            rusqlite::params![series_id, data],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_series_metadata(
+        &self,
+        series_id: i32,
+    ) -> Result<SeriesMetadata, Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT data FROM series_metadata WHERE series_id = ?")?;
+        match stmt.query_row([series_id], |row| row.get::<_, String>(0)) {
+            Ok(data) => Ok(serde_json::from_str(&data)?),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(SeriesMetadata::default()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     pub fn get_series(&self, library_id: &i32) -> Result<Vec<Series>, Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT id, title, read, pages FROM series WHERE library_id = ?")?;
+        // Parse dates instead of comparing text: UTC offsets and fractional
+        // seconds may differ. Unknown/invalid dates sort after dated series.
+        let mut stmt = conn.prepare(
+            "SELECT id, title, read, pages, last_updated FROM series WHERE library_id = ?
+             ORDER BY julianday(last_updated) DESC, title COLLATE NOCASE ASC, id ASC",
+        )?;
         let series = stmt.query_map([library_id.to_string()], |row| {
             Ok(Series {
                 id: row.get(0)?,
@@ -153,9 +202,26 @@ impl Database {
                 pages: row.get(3)?,
                 library_id: library_id.clone(),
                 is_cached: false,
+                last_updated: row.get(4)?,
             })
         })?;
         Ok(series.collect::<Result<Vec<Series>, rusqlite::Error>>()?)
+    }
+
+    pub fn get_series_title(
+        &self,
+        series_id: i32,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        match conn.query_row(
+            "SELECT title FROM series WHERE id = ?",
+            [series_id],
+            |row| row.get(0),
+        ) {
+            Ok(title) => Ok(Some(title)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub fn get_series_library_id(
@@ -179,24 +245,26 @@ impl Database {
         let key_str: i32 = stmt.query_row([series.id.to_string()], |row| row.get(0))?;
         if key_str == 0 {
             conn.execute(
-                "INSERT INTO series (id, library_id, title, read, pages) VALUES (?, ?, ?, ?, ?)",
-                [
-                    series.id.to_string(),
-                    series.library_id.to_string(),
-                    series.title.to_string(),
-                    series.read.to_string(),
-                    series.pages.to_string(),
+                "INSERT INTO series (id, library_id, title, read, pages, last_updated) VALUES (?, ?, ?, ?, ?, ?)",
+                rusqlite::params![
+                    series.id,
+                    series.library_id,
+                    series.title,
+                    series.read,
+                    series.pages,
+                    series.last_updated,
                 ],
             )?;
         } else {
-            // Update existing series with new progress and title
+            // Refresh the server timestamp along with metadata and progress.
             conn.execute(
-                "UPDATE series SET title = ?, read = ?, pages = ? WHERE id = ?",
-                [
-                    series.title.to_string(),
-                    series.read.to_string(),
-                    series.pages.to_string(),
-                    series.id.to_string(),
+                "UPDATE series SET title = ?, read = ?, pages = ?, last_updated = ? WHERE id = ?",
+                rusqlite::params![
+                    series.title,
+                    series.read,
+                    series.pages,
+                    series.last_updated,
+                    series.id,
                 ],
             )?;
         }
@@ -290,6 +358,45 @@ impl Database {
         } else {
             Ok(None)
         }
+    }
+
+    /// Prefer the last opened item, then recent pending progress, then a read item
+    /// from the local library. The saved item remains available after uploads
+    /// remove acknowledged rows from `read_progress`.
+    pub fn continue_reading(
+        &self,
+    ) -> Result<Vec<(Volume, String, i32)>, Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT v.id, v.series_id, v.chapter_id, v.volume_id, v.title, v.read, v.pages,
+                    s.title, s.library_id
+             FROM volumes v JOIN series s ON s.id = v.series_id
+             WHERE v.pages > 0 AND (v.read > 0 OR v.id = CAST(
+                 (SELECT value FROM settings WHERE key = 'last_read_volume' LIMIT 1) AS INTEGER))
+             ORDER BY (v.id = COALESCE(CAST(
+                 (SELECT value FROM settings WHERE key = 'last_read_volume' LIMIT 1) AS INTEGER), 0)) DESC,
+                 COALESCE((SELECT MAX(rp.id) FROM read_progress rp
+                           WHERE rp.series_id = v.series_id AND rp.chapter_id = v.chapter_id
+                             AND rp.volume_id = v.volume_id), 0) DESC,
+                 (v.read < v.pages) DESC, v.rowid DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                Volume {
+                    id: row.get(0)?,
+                    series_id: row.get(1)?,
+                    chapter_id: row.get(2)?,
+                    volume_id: row.get(3)?,
+                    title: row.get(4)?,
+                    read: row.get(5)?,
+                    pages: row.get(6)?,
+                    is_cached: false,
+                },
+                row.get(7)?,
+                row.get(8)?,
+            ))
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     pub fn add_volume(&self, volume: &Volume) -> Result<(), Box<dyn std::error::Error>> {

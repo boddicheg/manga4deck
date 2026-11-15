@@ -1,18 +1,25 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine;
 use dioxus::desktop::{tao::dpi::LogicalSize, Config, WindowBuilder};
 use dioxus::prelude::*;
-use once_cell::sync::OnceCell;
+use once_cell::sync::{Lazy, OnceCell};
 use tokio::sync::Mutex;
 
 use crate::kavita::{
-    get_cache_size, ConnectionCreds, Kavita, Library, ReadProgress, Series, Volume,
+    get_cache_size, ConnectionCreds, Kavita, Library, ReadProgress, Series, SeriesMetadata, Volume,
 };
+
+#[path = "ember_ui.rs"]
+mod ember_ui;
+use ember_ui::{EmberAction, EmberScreen, HomeRead, SeriesFilter};
 
 pub type SharedKavita = Arc<Mutex<Kavita>>;
 
 static KAVITA: OnceCell<SharedKavita> = OnceCell::new();
+static TOAST_MESSAGES: Lazy<tokio::sync::broadcast::Sender<String>> =
+    Lazy::new(|| tokio::sync::broadcast::channel(32).0);
 const READER_BATCH_SIZE: i32 = 10;
 const SHELF_COLUMNS: usize = 7;
 
@@ -26,7 +33,7 @@ enum Page {
     Settings,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct UiStatus {
     server_ip: String,
     logged_as: String,
@@ -34,24 +41,6 @@ struct UiStatus {
     offline_mode: bool,
     cache_mb: u64,
     message: String,
-}
-
-impl UiStatus {
-    fn line(&self) -> String {
-        if self.offline_mode {
-            format!("Server status: offline, ip is {}", self.server_ip)
-        } else {
-            format!(
-                "Server status: online, logged as {}, ip is {}",
-                if self.logged_as.is_empty() {
-                    "(not signed in)"
-                } else {
-                    &self.logged_as
-                },
-                self.server_ip,
-            )
-        }
-    }
 }
 
 fn kavita() -> SharedKavita {
@@ -95,6 +84,54 @@ async fn load_libraries() -> Result<Vec<Library>, String> {
         .map_err(|err| err.to_string())
 }
 
+async fn load_home_read() -> Result<Option<HomeRead>, String> {
+    let state = snapshot().await;
+    tokio::task::spawn_blocking(move || {
+        let candidates = state.db.continue_reading().map_err(|err| err.to_string())?;
+        Ok(candidates
+            .into_iter()
+            .find_map(|(volume, title, library_id)| {
+                if state.offline_mode && !state.db.is_volume_fully_cached(volume.id) {
+                    return None;
+                }
+                Some(HomeRead {
+                    volume,
+                    title,
+                    library_id,
+                })
+            }))
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+async fn load_downloaded_series() -> Result<Vec<Series>, String> {
+    let state = snapshot().await;
+    tokio::task::spawn_blocking(move || {
+        let mut items = Vec::new();
+        for library in state.db.get_libraries().map_err(|err| err.to_string())? {
+            for item in state
+                .db
+                .get_series(&library.id)
+                .map_err(|err| err.to_string())?
+            {
+                let ready = state
+                    .db
+                    .get_volumes(&item.id)
+                    .map_err(|err| err.to_string())?
+                    .iter()
+                    .any(|v| state.db.is_volume_fully_cached(v.id));
+                if ready || state.is_series_caching(item.id) {
+                    items.push(item);
+                }
+            }
+        }
+        Ok(items)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
 async fn load_series(library_id: i32) -> Result<Vec<Series>, String> {
     snapshot()
         .await
@@ -125,7 +162,7 @@ async fn toggle_volume_read(volume: &Volume) -> Result<bool, String> {
 
 async fn toggle_reader_item(kavita: &Kavita, volume: &Volume) -> Result<bool, String> {
     if kavita.offline_mode {
-        return Err("Go online to change a chapter's read status".into());
+        return Err("Go online to change reading status".into());
     }
     let is_complete = volume.pages > 0 && volume.read >= volume.pages;
     if is_complete {
@@ -292,20 +329,21 @@ fn visible_tile_count(
     volumes: &[Volume],
 ) -> usize {
     match page {
-        Page::Dashboard => 6,
+        Page::Dashboard => 1,
         Page::Libraries => libraries.len() + 1,
         Page::Series => series.len() + 1,
         Page::Volumes => volumes.len() + 1,
         Page::Reader => 0,
-        Page::Settings => 2,
+        Page::Settings => 5,
     }
 }
 
 fn tile_columns(page: Page, shelf_columns: usize) -> usize {
     match page {
-        Page::Libraries | Page::Series | Page::Volumes | Page::Dashboard => shelf_columns.max(1),
+        Page::Libraries | Page::Series | Page::Volumes => shelf_columns.max(1),
+        Page::Dashboard => 1,
         Page::Reader => 1,
-        Page::Settings => 2,
+        Page::Settings => 3,
     }
 }
 
@@ -323,62 +361,8 @@ fn move_selection(current: usize, key: &str, count: usize, columns: usize) -> us
     }
 }
 
-fn move_series_selection(
-    current: usize,
-    key: &str,
-    in_progress_count: usize,
-    completed_count: usize,
-    columns: usize,
-) -> usize {
-    let columns = columns.max(1);
-    if in_progress_count == 0 || completed_count == 0 {
-        return move_selection(
-            current,
-            key,
-            in_progress_count + completed_count + 1,
-            columns,
-        );
-    }
-
-    match key {
-        "ArrowDown" if current <= in_progress_count => {
-            let target = current + columns;
-            if current / columns < in_progress_count / columns {
-                target.min(in_progress_count)
-            } else {
-                let column = current % columns;
-                in_progress_count + 1 + column.min(completed_count - 1)
-            }
-        }
-        "ArrowUp" if current > in_progress_count => {
-            let completed_index = current - in_progress_count - 1;
-            if completed_index >= columns {
-                current - columns
-            } else {
-                let column = completed_index % columns;
-                let last_in_progress_row = (in_progress_count / columns) * columns;
-                (last_in_progress_row + column).min(in_progress_count)
-            }
-        }
-        _ => move_selection(
-            current,
-            key,
-            in_progress_count + completed_count + 1,
-            columns,
-        ),
-    }
-}
-
 fn selected_series(series: &[Series], selected: usize) -> Option<&Series> {
-    if selected == 0 {
-        return None;
-    }
-
-    series
-        .iter()
-        .filter(|item| item.read < 100)
-        .chain(series.iter().filter(|item| item.read >= 100))
-        .nth(selected - 1)
+    selected.checked_sub(1).and_then(|index| series.get(index))
 }
 
 fn series_selection_after_refresh(
@@ -391,8 +375,6 @@ fn series_selection_after_refresh(
     };
     updated
         .iter()
-        .filter(|s| s.read < 100)
-        .chain(updated.iter().filter(|s| s.read >= 100))
         .position(|series| series.id == previous.id)
         .map(|index| index + 1)
         .unwrap_or(0)
@@ -436,7 +418,37 @@ fn first_non_complete_volume_selection(volumes: &[Volume]) -> usize {
         .iter()
         .position(|volume| volume.pages <= 0 || volume.read < volume.pages)
         .map(|index| index + 1)
-        .unwrap_or(0)
+        .unwrap_or_else(|| usize::from(!volumes.is_empty()))
+}
+
+fn apply_volume_download_event(
+    event: &str,
+    series_id: i32,
+    volume_id: Option<i32>,
+    current: &mut Option<(i32, i32)>,
+    volumes: &mut [Volume],
+) {
+    match (event, volume_id) {
+        ("volume_caching_start", Some(id)) => *current = Some((series_id, id)),
+        ("volume_cached" | "volume_caching_failed", Some(id)) => {
+            if let Some(volume) = volumes
+                .iter_mut()
+                .find(|v| v.series_id == series_id && v.id == id)
+            {
+                // The worker reports success only after validating all cached pages.
+                volume.is_cached = event == "volume_cached";
+            }
+            if *current == Some((series_id, id)) {
+                *current = None;
+            }
+        }
+        ("caching_end" | "caching_cancelled", _) => {
+            if current.is_some_and(|(id, _)| id == series_id) {
+                *current = None;
+            }
+        }
+        _ => {}
+    }
 }
 
 fn initial_reader_page(volume: &Volume) -> i32 {
@@ -512,6 +524,9 @@ fn track_reader(
                 chapter_id: volume.chapter_id,
                 page: visible_page,
             };
+            if let Err(err) = snapshot.insert_setting("last_read_volume", &volume.id.to_string()) {
+                push_toast(format!("Failed to remember the current volume: {err}"));
+            }
             if let Err(err) = snapshot.save_progress(&progress).await {
                 push_toast(format!("Failed to save reading progress: {err}"));
             }
@@ -573,21 +588,8 @@ fn show_toast(
 }
 
 fn push_toast(message: String) {
-    let message = serde_json::to_string(&message).unwrap_or_else(|_| "\"\"".to_string());
-    document::eval(&format!(
-        r#"
-        (() => {{
-            const existing = document.querySelector(".toast.cache-toast");
-            if (existing) existing.remove();
-            const toast = document.createElement("div");
-            toast.className = "toast cache-toast";
-            toast.textContent = {};
-            document.body.appendChild(toast);
-            setTimeout(() => toast.remove(), 3000);
-        }})();
-        "#,
-        message
-    ));
+    // Background messages use the same renderer and dismissal timer as UI actions.
+    let _ = TOAST_MESSAGES.send(message);
 }
 
 const STYLE: &str = r#"
@@ -663,191 +665,6 @@ html, body, #main {
     transform: translateX(-50%) translateY(0);
   }
 }
-.app.settings-mode {
-  padding: 32px 24px;
-}
-.settings-mode > .tiles {
-  display: block;
-}
-.settings-page {
-  width: 100%;
-  max-width: 760px;
-  margin: 0 auto;
-}
-.settings-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  margin-bottom: 24px;
-}
-.settings-header h1 {
-  margin: 0;
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: -0.6px;
-}
-.settings-description {
-  margin: 8px 0 0;
-  color: #9ca5b4;
-  font-size: 14px;
-  line-height: 1.5;
-}
-.settings-connection {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border: 1px solid rgba(74, 222, 128, 0.24);
-  border-radius: 999px;
-  background: rgba(74, 222, 128, 0.08);
-  color: #86efac;
-  font-size: 13px;
-  font-weight: 600;
-}
-.settings-connection.offline {
-  border-color: #3c4350;
-  background: #20242c;
-  color: #aab2c0;
-}
-.settings-connection-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-}
-.settings-card {
-  margin: 0;
-  border: 1px solid #303541;
-  border-radius: 12px;
-  background: #191c23;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.16);
-}
-.settings-card-header {
-  padding: 24px 26px 0;
-}
-.settings-card-header h2 {
-  margin: 0;
-  color: #eef0f5;
-  font-size: 17px;
-  font-weight: 600;
-}
-.settings-account {
-  margin: 7px 0 0;
-  color: #9ca5b4;
-  font-size: 13px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-.settings-fields {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 22px 24px;
-  padding: 24px 26px 20px;
-}
-.settings-field {
-  min-width: 0;
-}
-.settings-field label {
-  display: block;
-  margin-bottom: 8px;
-  color: #dce1ea;
-  font-size: 14px;
-  font-weight: 500;
-}
-.settings-input {
-  width: 100%;
-  min-width: 0;
-  height: 44px;
-  box-sizing: border-box;
-  padding: 0 12px;
-  border: 1px solid #3a414e;
-  border-radius: 6px;
-  background: #11141a;
-  color: #f1f3f7;
-  font: inherit;
-  font-size: 15px;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
-}
-.settings-input::placeholder {
-  color: #747e90;
-  opacity: 1;
-}
-.settings-input:focus {
-  outline: none;
-  border-color: #82a7ff;
-  box-shadow: 0 0 0 3px rgba(130, 167, 255, 0.14);
-}
-.settings-input[readonly] {
-  opacity: 0.65;
-  cursor: progress;
-}
-.settings-hint {
-  margin: 7px 0 0;
-  color: #8d97a8;
-  font-size: 12px;
-  line-height: 1.5;
-}
-.settings-credential-note {
-  margin: 0;
-  padding: 0 26px 22px;
-  color: #9ca5b4;
-  font-size: 13px;
-  line-height: 1.5;
-}
-.settings-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  padding: 20px 26px;
-  border-top: 1px solid #303541;
-}
-.settings-button {
-  min-height: 44px;
-  box-sizing: border-box;
-  padding: 10px 18px;
-  border: 1px solid #424b5a;
-  border-radius: 6px;
-  background: transparent;
-  color: #d5dbe7;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.settings-button:hover {
-  background: #252b35;
-}
-.settings-save {
-  min-width: 154px;
-  border-color: #86a8ff;
-  background: #86a8ff;
-  color: #10182c;
-}
-.settings-save:hover {
-  border-color: #a0bbff;
-  background: #a0bbff;
-}
-.settings-button:focus-visible,
-.settings-button.selected {
-  outline: 2px solid #86a8ff;
-  outline-offset: 3px;
-}
-.settings-button[aria-disabled="true"] {
-  opacity: 0.6;
-  cursor: progress;
-}
-@media (max-width: 600px) {
-  .app.settings-mode { padding: 24px 16px; }
-  .settings-header { align-items: flex-start; gap: 12px; }
-  .settings-header h1 { font-size: 26px; }
-  .settings-card-header { padding: 20px 20px 0; }
-  .settings-fields { grid-template-columns: minmax(0, 1fr); padding: 20px; gap: 18px; }
-  .settings-credential-note { padding: 0 20px 20px; }
-  .settings-actions { flex-direction: column; padding: 20px; }
-  .settings-button { width: 100%; }
-}
 .series-page {
   width: 100%;
   min-height: 100vh;
@@ -904,18 +721,6 @@ html, body, #main {
 }
 .series-count {
   color: rgba(255,255,255,0.72);
-}
-.dashboard-status {
-  height: 34px;
-  margin: 12px 16px 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #22c55e;
-  color: #fff;
-  font-size: 15px;
-  font-weight: 800;
-  box-shadow: 0 4px 10px rgba(0,0,0,0.25);
 }
 .series-grid {
   position: relative;
@@ -1177,51 +982,6 @@ html, body, #main {
   line-height: 1;
   text-align: center;
 }
-.dashboard-card {
-  position: relative;
-  z-index: 1;
-  width: 150px;
-  height: 200px;
-  padding: 0;
-  border: 1px solid rgba(0,0,0,0.42);
-  border-radius: 4px;
-  overflow: hidden;
-  background:
-    radial-gradient(circle at 50% 34%, rgba(255,255,255,0.18), transparent 34%),
-    linear-gradient(145deg, #d9dee6 0%, #bfc6d0 58%, #9fa8b4 100%);
-  color: #0b0f14;
-  cursor: pointer;
-  box-shadow: 8px -8px 8px rgba(0,0,0,0.22), 3px -3px 4px rgba(0,0,0,0.16), inset 0 0 0 1px rgba(255,255,255,0.22);
-}
-.dashboard-card:focus,
-.dashboard-card:hover,
-.dashboard-card.selected {
-  outline: none;
-  border: 2px solid #111;
-  box-shadow: 8px -8px 12px rgba(0,0,0,0.44), 3px -3px 6px rgba(0,0,0,0.34), 0 0 0 2px rgba(255,75,75,0.85);
-}
-.dashboard-card-title {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 62px;
-  padding: 0 10px;
-  font-size: 17px;
-  font-weight: 900;
-  line-height: 1.05;
-  text-align: center;
-}
-.dashboard-card-subtitle {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 102px;
-  padding: 0 10px;
-  color: #4b5563;
-  font-size: 13px;
-  line-height: 1.15;
-  text-align: center;
-}
 .reader-page {
   width: 100vw;
   height: 100vh;
@@ -1349,36 +1109,147 @@ fn app() -> Element {
     let mut status = use_signal(|| tokio::runtime::Handle::current().block_on(load_status()));
     let busy = use_signal(|| false);
     let mut shelf_columns = use_signal(|| SHELF_COLUMNS);
-    let initial_status = status.peek().clone();
     let mut page = use_signal(|| Page::Dashboard);
     let mut selected_index = use_signal(|| 0usize);
     let mut dashboard_selection = use_signal(|| 0usize);
     let mut libraries_selection = use_signal(|| 0usize);
     let mut series_selection = use_signal(|| 0usize);
+    let mut series_filter = use_signal(SeriesFilter::default);
     let mut volumes_selection = use_signal(|| 0usize);
     let mut toast = use_signal(|| None::<String>);
     let mut toast_generation = use_signal(|| 0u64);
     let mut libraries = use_signal(Vec::<Library>::new);
     let mut series = use_signal(Vec::<Series>::new);
     let mut volumes = use_signal(Vec::<Volume>::new);
+    let mut current_download = use_signal(|| None::<(i32, i32)>);
+    use_effect(move || {
+        if page() == Page::Volumes {
+            spawn(async move {
+                let state = snapshot().await;
+                let current = *state.caching_current_volume.lock().unwrap();
+                current_download.set(current);
+            });
+        }
+    });
+    let detail_series_id = use_memo(move || {
+        if page() == Page::Volumes {
+            selected_series(&series.read(), series_selection()).map(|s| s.id)
+        } else {
+            None
+        }
+    });
+    let detail_metadata = use_resource(move || {
+        let id = detail_series_id();
+        async move {
+            let metadata = match id {
+                Some(id) => snapshot().await.get_series_metadata(id).await,
+                None => SeriesMetadata::default(),
+            };
+            (id, metadata)
+        }
+    });
     let mut reader_volume = use_signal(|| None::<Volume>);
     let mut reader_page = use_signal(|| 0i32);
     let mut reader_first_page = use_signal(|| 0i32);
     let mut reader_loaded_until = use_signal(|| 0i32);
     let mut reader_slider_visible = use_signal(|| false);
     let mut reader_slider_generation = use_signal(|| 0u64);
-    let mut server_ip = use_signal(|| initial_status.server_ip);
-    let mut username = use_signal(|| initial_status.saved_username);
-    let mut password = use_signal(String::new);
-    let mut api_key = use_signal(String::new);
     let mut cache_events_started = use_signal(|| false);
+
+    let mut home_read = use_signal(|| None::<HomeRead>);
+    let mut home_loading = use_signal(|| true);
+    let mut downloaded_series = use_signal(Vec::<Series>::new);
+    let mut home_generation = use_signal(|| 0u64);
+    let mut home_libraries_loading = use_signal(|| true);
+    let mut home_libraries_error = use_signal(|| false);
+    let mut home_libraries_refresh = use_signal(|| 0u64);
+    let mut home_libraries_generation = use_signal(|| 0u64);
+    let mut home_library_focus = use_signal(|| None::<i32>);
+    let mut library_from_home = use_signal(|| false);
+    let home_connection = use_memo(move || {
+        let current = status.read();
+        (
+            current.offline_mode,
+            current.server_ip.clone(),
+            current.logged_as.clone(),
+        )
+    });
+    use_effect(move || {
+        let current = page();
+        let _connection = home_connection();
+        let _refresh = home_libraries_refresh();
+        let generation = (*home_libraries_generation.peek()).wrapping_add(1);
+        home_libraries_generation.set(generation);
+        if current != Page::Dashboard {
+            return;
+        }
+        home_libraries_loading.set(true);
+        home_libraries_error.set(false);
+        spawn(async move {
+            let state = snapshot().await;
+            if *home_libraries_generation.peek() != generation {
+                return;
+            }
+            // Saved folders remain usable while refreshing or disconnected.
+            if let Ok(saved) = state.db.get_libraries() {
+                libraries.set(saved);
+            }
+            let result = tokio::time::timeout(Duration::from_secs(10), load_libraries()).await;
+            if *home_libraries_generation.peek() != generation {
+                return;
+            }
+            match result {
+                Ok(Ok(items)) => libraries.set(items),
+                _ => home_libraries_error.set(true),
+            }
+            home_libraries_loading.set(false);
+        });
+    });
+    use_effect(move || {
+        let current = page();
+        let _offline = status.read().offline_mode;
+        let generation = (*home_generation.peek()).wrapping_add(1);
+        home_generation.set(generation);
+        if matches!(
+            current,
+            Page::Dashboard | Page::Settings | Page::Series | Page::Volumes
+        ) {
+            if current == Page::Dashboard {
+                home_loading.set(true);
+            }
+            spawn(async move {
+                if current == Page::Dashboard {
+                    let result = load_home_read().await;
+                    if *home_generation.peek() != generation {
+                        return;
+                    }
+                    match result {
+                        Ok(read) => home_read.set(read),
+                        Err(err) => {
+                            home_read.set(None);
+                            push_toast(format!("Could not load reading progress: {err}"));
+                        }
+                    }
+                    home_loading.set(false);
+                }
+                let result = load_downloaded_series().await;
+                if *home_generation.peek() != generation {
+                    return;
+                }
+                match result {
+                    Ok(items) => downloaded_series.set(items),
+                    Err(err) => push_toast(format!("Could not load downloads: {err}")),
+                }
+            });
+        }
+    });
 
     use_effect(move || {
         let _ = selected_index();
-        if matches!(
-            page(),
-            Page::Dashboard | Page::Libraries | Page::Series | Page::Volumes
-        ) {
+        if page() == Page::Reader {
+            document::eval("document.querySelector('.app')?.focus({ preventScroll: true });");
+        }
+        if page() == Page::Libraries {
             document::eval(
                 r#"
                 setTimeout(() => {
@@ -1407,6 +1278,17 @@ fn app() -> Element {
                     reader_slider_visible.set(false);
                 }
             });
+        }
+    });
+
+    use_future(move || async move {
+        let mut messages = TOAST_MESSAGES.subscribe();
+        loop {
+            match messages.recv().await {
+                Ok(message) => show_toast(&mut status, &mut toast, &mut toast_generation, message),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
         }
     });
 
@@ -1457,33 +1339,76 @@ fn app() -> Element {
                 }
                 if !matches!(
                     event,
-                    "volume_caching_start" | "volume_cached" | "caching_end" | "caching_cancelled"
+                    "volume_caching_start"
+                        | "volume_cached"
+                        | "volume_caching_failed"
+                        | "caching_end"
+                        | "caching_cancelled"
                 ) {
                     continue;
                 }
 
-                if let Some(message) = msg["message"].as_str() {
-                    push_toast(message.to_string());
+                let event_series_id = msg["data"]["series_id"].as_i64().map(|id| id as i32);
+                let event_volume_id = msg["data"]["volume_id"].as_i64().map(|id| id as i32);
+                if let (Some(series_id), Some(volume_id)) = (event_series_id, event_volume_id) {
+                    if matches!(event, "volume_caching_start" | "volume_cached") {
+                        let state = snapshot().await;
+                        // Ignore queued notifications for downloads removed since
+                        // the worker sent them.
+                        if (event == "volume_caching_start"
+                            && *state.caching_current_volume.lock().unwrap()
+                                != Some((series_id, volume_id)))
+                            || (event == "volume_cached" && !state.is_volume_cached(volume_id))
+                        {
+                            continue;
+                        }
+                    }
                 }
 
-                let event_series_id = msg["data"]["series_id"].as_i64().map(|id| id as i32);
-                let should_refresh_volumes = event_series_id.map(|series_id| {
-                    if page() == Page::Volumes {
-                        volumes
-                            .read()
-                            .first()
-                            .map(|volume| volume.series_id == series_id)
-                            .unwrap_or(false)
-                    } else if page() == Page::Reader {
-                        reader_volume
-                            .read()
-                            .as_ref()
-                            .map(|volume| volume.series_id == series_id)
-                            .unwrap_or(false)
-                    } else {
-                        false
+                // Volume updates replace the current EMBER toast, using the
+                // worker's title-only messages rather than database IDs.
+                if matches!(
+                    event,
+                    "volume_caching_start"
+                        | "volume_cached"
+                        | "volume_caching_failed"
+                        | "caching_end"
+                ) {
+                    if let Some(message) = msg["message"].as_str() {
+                        push_toast(message.to_string());
                     }
-                });
+                }
+
+                if let Some(series_id) = event_series_id {
+                    apply_volume_download_event(
+                        event,
+                        series_id,
+                        event_volume_id,
+                        &mut current_download.write(),
+                        &mut volumes.write(),
+                    );
+                }
+                // Per-volume events update the affected row immediately. Recheck
+                // the complete cache only when the series job ends.
+                let should_refresh_volumes = event_series_id
+                    .filter(|_| matches!(event, "caching_end" | "caching_cancelled"))
+                    .map(|series_id| {
+                        if page() == Page::Volumes {
+                            volumes
+                                .read()
+                                .first()
+                                .map(|volume| volume.series_id == series_id)
+                                .unwrap_or(false)
+                        } else if page() == Page::Reader {
+                            reader_volume
+                                .read()
+                                .as_ref()
+                                .map(|volume| volume.series_id == series_id)
+                                .unwrap_or(false)
+                        } else {
+                            false
+                        }
+                    });
 
                 if should_refresh_volumes.unwrap_or(false) {
                     if let Some(series_id) = event_series_id {
@@ -1495,7 +1420,12 @@ fn app() -> Element {
                                 .map_err(|err| err.to_string())
                         };
                         match refreshed {
-                            Ok(items) => volumes.set(items),
+                            Ok(items) => {
+                                // A different series may have opened while waiting for the lock.
+                                if volumes.peek().iter().any(|v| v.series_id == series_id) {
+                                    volumes.set(items);
+                                }
+                            }
                             Err(err) => {
                                 push_toast(format!("Failed to refresh cached volumes: {err}"))
                             }
@@ -1530,16 +1460,6 @@ fn app() -> Element {
     let libraries_snapshot = libraries.read().clone();
     let series_snapshot = series.read().clone();
     let volumes_snapshot = volumes.read().clone();
-    let in_progress_series = series_snapshot
-        .iter()
-        .filter(|item| item.read < 100)
-        .cloned()
-        .collect::<Vec<_>>();
-    let completed_series = series_snapshot
-        .iter()
-        .filter(|item| item.read >= 100)
-        .cloned()
-        .collect::<Vec<_>>();
     let selected_snapshot = selected_index();
     let selectable_count = visible_tile_count(
         page_snapshot,
@@ -1550,24 +1470,338 @@ fn app() -> Element {
     let selected_snapshot = selected_snapshot.min(selectable_count.saturating_sub(1));
     let app_class = if matches!(
         page_snapshot,
-        Page::Dashboard | Page::Libraries | Page::Series | Page::Volumes | Page::Reader
+        Page::Dashboard | Page::Settings | Page::Series | Page::Volumes
     ) {
-        "app series-mode"
+        "app ember-mode"
     } else {
-        "app settings-mode"
+        "app series-mode"
+    };
+
+    let mut on_series_focus = move |id: i32| {
+        let items = series.peek();
+        if let Some(index) = items.iter().position(|s| s.id == id) {
+            selected_index.set(index + 1);
+            series_selection.set(index + 1);
+        }
+    };
+    let on_volume_focus = move |id: i32| {
+        if let Some(index) = volumes.peek().iter().position(|v| v.id == id) {
+            selected_index.set(index + 1);
+            volumes_selection.set(index + 1);
+        }
+    };
+
+    let on_ember_action = move |action: EmberAction| {
+        run_ui_action(busy, async move {
+            match action {
+                EmberAction::Home => {
+                    selected_index.set(0);
+                    page.set(Page::Dashboard);
+                }
+                EmberAction::Settings => {
+                    selected_index.set(3);
+                    page.set(Page::Settings);
+                }
+                EmberAction::Library => match load_libraries().await {
+                    Ok(items) => {
+                        library_from_home.set(false);
+                        libraries.set(items);
+                        selected_index.set(0);
+                        page.set(Page::Libraries);
+                    }
+                    Err(err) => show_toast(
+                        &mut status,
+                        &mut toast,
+                        &mut toast_generation,
+                        format!("Failed to load libraries: {err}"),
+                    ),
+                },
+                EmberAction::OpenLibrary(library) => match load_series(library.id).await {
+                    Ok(items) => {
+                        libraries_selection.set(
+                            libraries
+                                .peek()
+                                .iter()
+                                .position(|item| item.id == library.id)
+                                .map(|i| i + 1)
+                                .unwrap_or(0),
+                        );
+                        home_library_focus.set(Some(library.id));
+                        library_from_home.set(true);
+                        series.set(items);
+                        series_selection.set(0);
+                        series_filter.set(SeriesFilter::Unread);
+                        selected_index.set(0);
+                        page.set(Page::Series);
+                    }
+                    Err(err) => show_toast(
+                        &mut status,
+                        &mut toast,
+                        &mut toast_generation,
+                        format!("Could not open {}: {err}", library.title),
+                    ),
+                },
+                EmberAction::OpenSeries(item) => {
+                    on_series_focus(item.id);
+                    match load_volumes(item.id).await {
+                        Ok(items) => {
+                            let next = first_non_complete_volume_selection(&items);
+                            volumes.set(items);
+                            volumes_selection.set(next);
+                            selected_index.set(next);
+                            page.set(Page::Volumes);
+                        }
+                        Err(err) => show_toast(
+                            &mut status,
+                            &mut toast,
+                            &mut toast_generation,
+                            format!("Could not open {}: {err}", item.title),
+                        ),
+                    }
+                }
+                EmberAction::OpenVolume(volume) => {
+                    if volume.pages <= 0 || (status.peek().offline_mode && !volume.is_cached) {
+                        show_toast(
+                            &mut status,
+                            &mut toast,
+                            &mut toast_generation,
+                            if volume.pages <= 0 {
+                                "This volume has no readable pages yet.".into()
+                            } else {
+                                "Connect to Kavita or download this volume before reading offline."
+                                    .into()
+                            },
+                        );
+                        return;
+                    }
+                    if let Some(index) = volumes.peek().iter().position(|v| v.id == volume.id) {
+                        selected_index.set(index + 1);
+                        volumes_selection.set(index + 1);
+                    }
+                    let start = initial_reader_page(&volume);
+                    reader_page.set(start);
+                    reader_first_page.set(start);
+                    reader_loaded_until.set(reader_batch_end(start, volume.pages));
+                    reader_slider_visible.set(false);
+                    reader_volume.set(Some(volume));
+                    page.set(Page::Reader);
+                }
+                EmberAction::BackFromSeries => {
+                    let library_id = current_series_library_id(
+                        &series.read(),
+                        &libraries.read(),
+                        libraries_selection(),
+                    );
+                    if let Some(id) = library_id {
+                        match load_series(id).await {
+                            Ok(items) => replace_series(
+                                items,
+                                series,
+                                series_selection,
+                                selected_index,
+                                page,
+                            ),
+                            Err(err) => show_toast(
+                                &mut status,
+                                &mut toast,
+                                &mut toast_generation,
+                                format!("Failed to refresh series: {err}"),
+                            ),
+                        }
+                    }
+                    selected_index.set(series_selection());
+                    page.set(Page::Series);
+                }
+                EmberAction::BackFromLibrary => {
+                    selected_index.set(if library_from_home() {
+                        0
+                    } else {
+                        libraries_selection()
+                    });
+                    page.set(if library_from_home() {
+                        Page::Dashboard
+                    } else {
+                        Page::Libraries
+                    });
+                }
+                EmberAction::RefreshLibraries => {
+                    home_libraries_refresh.set(home_libraries_refresh().wrapping_add(1));
+                }
+                EmberAction::Resume(read) => {
+                    let state = snapshot().await;
+                    let context = (
+                        state.db.get_libraries(),
+                        state.db.get_series(&read.library_id),
+                        state.db.get_volumes(&read.volume.series_id),
+                    );
+                    match context {
+                        (Ok(libs), Ok(items), Ok(siblings)) => {
+                            library_from_home.set(true);
+                            series_filter.set(SeriesFilter::Unread);
+                            libraries_selection.set(
+                                libs.iter()
+                                    .position(|l| l.id == read.library_id)
+                                    .map(|i| i + 1)
+                                    .unwrap_or(0),
+                            );
+                            series_selection.set(
+                                items
+                                    .iter()
+                                    .position(|s| s.id == read.volume.series_id)
+                                    .map(|i| i + 1)
+                                    .unwrap_or(0),
+                            );
+                            volumes_selection.set(
+                                siblings
+                                    .iter()
+                                    .position(|v| v.id == read.volume.id)
+                                    .map(|i| i + 1)
+                                    .unwrap_or(0),
+                            );
+                            libraries.set(libs);
+                            series.set(items);
+                            volumes.set(siblings);
+                            let start = initial_reader_page(&read.volume);
+                            reader_page.set(start);
+                            reader_first_page.set(start);
+                            reader_loaded_until.set(reader_batch_end(start, read.volume.pages));
+                            reader_slider_visible.set(false);
+                            reader_volume.set(Some(read.volume));
+                            page.set(Page::Reader);
+                        }
+                        _ => show_toast(
+                            &mut status,
+                            &mut toast,
+                            &mut toast_generation,
+                            "Could not restore this volume. Open it from your library.".into(),
+                        ),
+                    }
+                }
+                EmberAction::OpenDownload(item) => {
+                    library_from_home.set(false);
+                    series_filter.set(SeriesFilter::Downloaded);
+                    let state = snapshot().await;
+                    match state.get_cached_volumes(&item.id) {
+                        Ok(items) if !items.is_empty() => {
+                            if let Ok(libs) = state.db.get_libraries() {
+                                libraries_selection.set(
+                                    libs.iter()
+                                        .position(|l| l.id == item.library_id)
+                                        .map(|i| i + 1)
+                                        .unwrap_or(0),
+                                );
+                                libraries.set(libs);
+                            }
+                            if let Ok(items) = state.db.get_series(&item.library_id) {
+                                series_selection.set(
+                                    items
+                                        .iter()
+                                        .position(|s| s.id == item.id)
+                                        .map(|i| i + 1)
+                                        .unwrap_or(0),
+                                );
+                                series.set(items);
+                            }
+                            let next = first_non_complete_volume_selection(&items);
+                            volumes.set(items);
+                            selected_index.set(next);
+                            volumes_selection.set(next);
+                            page.set(Page::Volumes);
+                        }
+                        Ok(_) => show_toast(
+                            &mut status,
+                            &mut toast,
+                            &mut toast_generation,
+                            "No downloaded volumes are ready yet.".into(),
+                        ),
+                        Err(err) => show_toast(
+                            &mut status,
+                            &mut toast,
+                            &mut toast_generation,
+                            format!("Could not open downloads: {err}"),
+                        ),
+                    }
+                }
+                EmberAction::ClearCache => {
+                    if status.peek().offline_mode {
+                        show_toast(
+                            &mut status,
+                            &mut toast,
+                            &mut toast_generation,
+                            "Go online before clearing cached pages and local library data.".into(),
+                        );
+                    } else {
+                        match clear_cache().await {
+                            Ok(()) => {
+                                libraries.set(Vec::new());
+                                series.set(Vec::new());
+                                volumes.set(Vec::new());
+                                home_read.set(None);
+                                downloaded_series.set(Vec::new());
+                                status.set(load_status().await);
+                                show_toast(
+                                    &mut status,
+                                    &mut toast,
+                                    &mut toast_generation,
+                                    "Cache cleared. Reopen your library to refresh its data."
+                                        .into(),
+                                );
+                            }
+                            Err(err) => show_toast(
+                                &mut status,
+                                &mut toast,
+                                &mut toast_generation,
+                                format!("Failed to clear cache: {err}"),
+                            ),
+                        }
+                    }
+                }
+                EmberAction::Update => match update_server_library().await {
+                    Ok(()) => show_toast(
+                        &mut status,
+                        &mut toast,
+                        &mut toast_generation,
+                        "Update requested in Kavita. Your server will refresh its libraries."
+                            .into(),
+                    ),
+                    Err(err) => show_toast(
+                        &mut status,
+                        &mut toast,
+                        &mut toast_generation,
+                        format!("Server library update failed: {err}"),
+                    ),
+                },
+                EmberAction::ToggleOffline => {
+                    let result = toggle_offline().await;
+                    status.set(load_status().await);
+                    let message = match result {
+                        Ok(true) => "Offline mode is active".into(),
+                        Ok(false) => "Connected to Kavita".into(),
+                        Err(err) => format!("Could not reconnect: {err}"),
+                    };
+                    show_toast(&mut status, &mut toast, &mut toast_generation, message);
+                }
+                EmberAction::Connect(creds) => {
+                    connect_settings(creds, status, toast, toast_generation).await
+                }
+                EmberAction::Exit => exit_process(),
+            }
+        });
     };
 
     rsx! {
         style { "{STYLE}" }
+        style { "{ember_ui::STYLE}" }
         div {
             class: "{app_class}",
             "aria-busy": "{busy}",
             tabindex: "0",
-            autofocus: "true",
             onmounted: move |event| {
                 let element = event.data();
                 spawn(async move {
-                    let _ = element.set_focus(true).await;
+                    if !matches!(page(), Page::Dashboard | Page::Settings | Page::Series | Page::Volumes) {
+                        let _ = element.set_focus(true).await;
+                    }
                     let mut layout = document::eval(include_str!("layout.js"));
                     while let Ok(columns) = layout.recv::<usize>().await {
                         shelf_columns.set(columns.max(1));
@@ -1575,6 +1809,9 @@ fn app() -> Element {
                 });
             },
             onkeydown: move |event| {
+                if matches!(page(), Page::Dashboard | Page::Settings | Page::Series | Page::Volumes)
+                    && !((page() == Page::Series && event.key().to_string() == "F2")
+                        || (page() == Page::Volumes && matches!(event.key().to_string().as_str(), "F1" | "F2"))) { return; }
                 if busy() {
                     event.prevent_default();
                     return;
@@ -1633,23 +1870,7 @@ fn app() -> Element {
                     } else {
                         let count = visible_tile_count(page(), &libraries.read(), &series.read(), &volumes.read());
                         let current = selected_index().min(count.saturating_sub(1));
-                        let next = if page() == Page::Series {
-                            let series_snapshot = series.read();
-                            let in_progress_count = series_snapshot
-                                .iter()
-                                .filter(|item| item.read < 100)
-                                .count();
-                            let completed_count = series_snapshot.len().saturating_sub(in_progress_count);
-                            move_series_selection(
-                                current,
-                                key.as_str(),
-                                in_progress_count,
-                                completed_count,
-                                shelf_columns(),
-                            )
-                        } else {
-                            move_selection(current, key.as_str(), count, tile_columns(page(), shelf_columns()))
-                        };
+                        let next = move_selection(current, key.as_str(), count, tile_columns(page(), shelf_columns()));
                         selected_index.set(next);
                         match page() {
                             Page::Dashboard => dashboard_selection.set(next),
@@ -1671,92 +1892,7 @@ fn app() -> Element {
 
                             let selected = selected_index().min(visible_tile_count(page(), &libraries.read(), &series.read(), &volumes.read()).saturating_sub(1));
                             match page() {
-                                Page::Dashboard => match selected {
-                                    0 => match load_libraries().await {
-                                        Ok(items) => {
-                                            libraries.set(items);
-                                            show_toast(
-                                                &mut status,
-                                                &mut toast,
-                                                &mut toast_generation,
-                                                format!("Loaded {} libraries", libraries.read().len()),
-                                            );
-                                            dashboard_selection.set(selected);
-                                            selected_index.set(0);
-                                            page.set(Page::Libraries);
-                                        }
-                                        Err(err) => show_toast(
-                                            &mut status,
-                                            &mut toast,
-                                            &mut toast_generation,
-                                            format!("Failed to load libraries: {err}"),
-                                        ),
-                                    },
-                                    1 => match clear_cache().await {
-                                        Ok(()) => {
-                                            status.set(load_status().await);
-                                            show_toast(
-                                                &mut status,
-                                                &mut toast,
-                                                &mut toast_generation,
-                                                "Cache cleared".to_string(),
-                                            );
-                                        }
-                                        Err(err) => show_toast(
-                                            &mut status,
-                                            &mut toast,
-                                            &mut toast_generation,
-                                            format!("Failed to clear cache: {err}"),
-                                        ),
-                                    },
-                                    2 => {
-                                        show_toast(
-                                            &mut status,
-                                            &mut toast,
-                                            &mut toast_generation,
-                                            "Updating server library...".to_string(),
-                                        );
-                                        match update_server_library().await {
-                                            Ok(()) => show_toast(
-                                                &mut status,
-                                                &mut toast,
-                                                &mut toast_generation,
-                                                "Server library update requested".to_string(),
-                                            ),
-                                            Err(err) => show_toast(
-                                                &mut status,
-                                                &mut toast,
-                                                &mut toast_generation,
-                                                format!("Server library update failed: {err}"),
-                                            ),
-                                        }
-                                    }
-                                    3 => {
-                                        dashboard_selection.set(selected);
-                                        selected_index.set(0);
-                                        page.set(Page::Settings);
-                                    }
-                                    4 => match toggle_offline().await {
-                                        Ok(_) => {
-                                            status.set(load_status().await);
-                                            let message = status.read().message.clone();
-                                            show_toast(
-                                                &mut status,
-                                                &mut toast,
-                                                &mut toast_generation,
-                                                message,
-                                            );
-                                        }
-                                        Err(err) => show_toast(
-                                            &mut status,
-                                            &mut toast,
-                                            &mut toast_generation,
-                                            format!("Offline toggle failed: {err}"),
-                                        ),
-                                    },
-                                    5 => exit_process(),
-                                    _ => {}
-                                },
+                                Page::Dashboard => {},
                                 Page::Libraries => {
                                     if selected == 0 {
                                         selected_index.set(dashboard_selection());
@@ -1766,6 +1902,8 @@ fn app() -> Element {
                                         match load_series(id).await {
                                             Ok(items) => {
                                                 series.set(items);
+                                                series_selection.set(0);
+                                                series_filter.set(SeriesFilter::Unread);
                                                 show_toast(
                                                     &mut status,
                                                     &mut toast,
@@ -1787,8 +1925,8 @@ fn app() -> Element {
                                 }
                                 Page::Series => {
                                     if selected == 0 {
-                                        selected_index.set(libraries_selection());
-                                        page.set(Page::Libraries);
+                                        selected_index.set(if library_from_home() { 0 } else { libraries_selection() });
+                                        page.set(if library_from_home() { Page::Dashboard } else { Page::Libraries });
                                     } else if let Some(item) = { selected_series(&series.read(), selected).cloned() } {
                                         let id = item.id;
                                         match load_volumes(id).await {
@@ -1842,20 +1980,7 @@ fn app() -> Element {
                                     }
                                 }
                                 Page::Reader => {}
-                                Page::Settings => match selected {
-                                    0 => connect_settings(
-                                        ConnectionCreds {
-                                            ip: server_ip(), username: username(),
-                                            password: password(), api_key: api_key(),
-                                        },
-                                        status, toast, toast_generation,
-                                    ).await,
-                                    1 => {
-                                        selected_index.set(dashboard_selection());
-                                        page.set(Page::Dashboard);
-                                    }
-                                    _ => {}
-                                },
+                                Page::Settings => {},
                             }
                         }
                         "F1" => {
@@ -1925,7 +2050,7 @@ fn app() -> Element {
                                         libraries_selection(),
                                     );
                                     volume.map(|item| {
-                                        (item.series_id, format!("series {}", item.series_id), library_id)
+                                        (item.series_id, "this series".to_string(), library_id)
                                     })
                                 }
                                 Page::Reader => reader_volume
@@ -1937,16 +2062,23 @@ fn app() -> Element {
                                             &libraries.read(),
                                             libraries_selection(),
                                         );
-                                        (item.series_id, format!("series {}", item.series_id), library_id)
+                                        (item.series_id, "this series".to_string(), library_id)
                                     }),
                                 Page::Dashboard | Page::Libraries | Page::Settings => None,
                             };
 
                             if let Some((series_id, title, library_id)) = current_series {
-                                if is_series_fully_cached(series_id).await {
+                                let title = snapshot().await.db.get_series_title(series_id)
+                                    .ok().flatten().filter(|name| !name.trim().is_empty()).unwrap_or(title);
+                                let has_downloaded_volumes = page() == Page::Volumes && volumes.peek().iter()
+                                    .any(|volume| volume.series_id == series_id && volume.is_cached);
+                                if has_downloaded_volumes || is_series_fully_cached(series_id).await {
                                     match remove_series_cache(series_id).await {
                                         Ok(()) => {
                                             if matches!(page(), Page::Volumes | Page::Reader) {
+                                                if current_download.peek().is_some_and(|(id, _)| id == series_id) {
+                                                    current_download.set(None);
+                                                }
                                                 match load_cached_volumes(series_id).await {
                                                     Ok(items) => volumes.set(items),
                                                     Err(err) => show_toast(
@@ -1956,8 +2088,12 @@ fn app() -> Element {
                                                         format!("Failed to refresh volumes: {err}"),
                                                     ),
                                                 }
-                                            }
-                                            if let Some(library_id) = library_id {
+                                                // Keep the open series available after removing its
+                                                // downloads, including when browsing offline.
+                                                for item in series.write().iter_mut().filter(|item| item.id == series_id) {
+                                                    item.is_cached = false;
+                                                }
+                                            } else if let Some(library_id) = library_id {
                                                 match load_series(library_id).await {
                                                     Ok(items) => replace_series(items, series, series_selection, selected_index, page),
                                                     Err(err) => show_toast(
@@ -1968,6 +2104,7 @@ fn app() -> Element {
                                                     ),
                                                 }
                                             }
+                                            status.write().cache_mb = get_cache_size(1024 * 1024);
                                             show_toast(
                                                 &mut status,
                                                 &mut toast,
@@ -2029,8 +2166,8 @@ fn app() -> Element {
                                     page.set(Page::Dashboard);
                                 }
                                 Page::Series => {
-                                    selected_index.set(libraries_selection());
-                                    page.set(Page::Libraries);
+                                    selected_index.set(if library_from_home() { 0 } else { libraries_selection() });
+                                    page.set(if library_from_home() { Page::Dashboard } else { Page::Libraries });
                                 }
                                 Page::Volumes => {
                                     let library_id = current_series_library_id(
@@ -2069,130 +2206,28 @@ fn app() -> Element {
                 div { class: "busy-indicator", role: "status", "Loading…" }
             }
             if let Some(message) = toast_snapshot {
-                div { class: "toast", "{message}" }
+                div { class: "toast", role: "status", "aria-live": "polite", "{message}" }
             }
             div { class: "tiles",
                 {
                     match page_snapshot {
-                        Page::Dashboard => rsx! {
-                            div { class: "series-page",
-                                div { class: "series-titlebar",
-                                    div {}
-                                    h1 { "Dashboard" }
-                                    div {}
-                                }
-                                div { class: "dashboard-status", "{status_snapshot.line()}" }
-                                div { class: "series-section",
-                                    h2 { class: "series-section-title", "Actions" }
-                                    div { class: "series-grid",
-                                        div { class: "series-card-wrap",
-                                            button {
-                                                onfocus: move |_| selected_index.set(0),
-                                                "aria-disabled": "{busy}",
-                                                class: if selected_snapshot == 0 { "dashboard-card selected" } else { "dashboard-card" },
-                                                onclick: move |_| {
-                                                    run_ui_action(busy, async move {
-                                                        match load_libraries().await {
-                                                            Ok(items) => {
-                                                                libraries.set(items);
-                                                                show_toast(&mut status, &mut toast, &mut toast_generation, format!("Loaded {} libraries", libraries.read().len()));
-                                                                dashboard_selection.set(0);
-                                                                selected_index.set(0);
-                                                                page.set(Page::Libraries);
-                                                            }
-                                                            Err(err) => show_toast(&mut status, &mut toast, &mut toast_generation, format!("Failed to load libraries: {err}")),
-                                                        }
-
-                                                    });
-                                                },
-                                                div { class: "dashboard-card-title", "Kavita" }
-                                                div { class: "dashboard-card-subtitle", "{status_snapshot.server_ip}" }
-                                            }
-                                        }
-                                        div { class: "series-card-wrap",
-                                            button {
-                                                onfocus: move |_| selected_index.set(1),
-                                                "aria-disabled": "{busy}",
-                                                class: if selected_snapshot == 1 { "dashboard-card selected" } else { "dashboard-card" },
-                                                onclick: move |_| {
-                                                    run_ui_action(busy, async move {
-                                                        match clear_cache().await {
-                                                            Ok(()) => status.set(load_status().await),
-                                                            Err(err) => show_toast(&mut status, &mut toast, &mut toast_generation, format!("Failed to clear cache: {err}")),
-                                                        }
-
-                                                    });
-                                                },
-                                                div { class: "dashboard-card-title", "Clean Cache" }
-                                                div { class: "dashboard-card-subtitle", "{status_snapshot.cache_mb}Mb" }
-                                            }
-                                        }
-                                        div { class: "series-card-wrap",
-                                            button {
-                                                onfocus: move |_| selected_index.set(2),
-                                                "aria-disabled": "{busy}",
-                                                class: if selected_snapshot == 2 { "dashboard-card selected" } else { "dashboard-card" },
-                                                onclick: move |_| {
-                                                    run_ui_action(busy, async move {
-                                                        show_toast(&mut status, &mut toast, &mut toast_generation, "Updating server library...".into());
-                                                        match update_server_library().await {
-                                                            Ok(()) => show_toast(&mut status, &mut toast, &mut toast_generation, "Server library update requested".into()),
-                                                            Err(err) => show_toast(&mut status, &mut toast, &mut toast_generation, format!("Server library update failed: {err}")),
-                                                        }
-
-                                                    });
-                                                },
-                                                div { class: "dashboard-card-title", "Update" }
-                                                div { class: "dashboard-card-subtitle", "Server Kavita" }
-                                            }
-                                        }
-                                        div { class: "series-card-wrap",
-                                            button {
-                                                onfocus: move |_| selected_index.set(3),
-                                                "aria-disabled": "{busy}",
-                                                class: if selected_snapshot == 3 { "dashboard-card selected" } else { "dashboard-card" },
-                                                onclick: move |_| {
-                                                    dashboard_selection.set(3);
-                                                    selected_index.set(0);
-                                                    page.set(Page::Settings);
-                                                },
-                                                div { class: "dashboard-card-title", "Settings" }
-                                                div { class: "dashboard-card-subtitle", "Configure connection" }
-                                            }
-                                        }
-                                        div { class: "series-card-wrap",
-                                            button {
-                                                onfocus: move |_| selected_index.set(4),
-                                                "aria-disabled": "{busy}",
-                                                class: if selected_snapshot == 4 { "dashboard-card selected" } else { "dashboard-card" },
-                                                onclick: move |_| {
-                                                    run_ui_action(busy, async move {
-                                                        match toggle_offline().await {
-                                                            Ok(_) => status.set(load_status().await),
-                                                            Err(err) => {
-                                            status.set(load_status().await);
-                                            show_toast(&mut status, &mut toast, &mut toast_generation, format!("Offline toggle failed: {err}"));
-                                        },
-                                                        }
-
-                                                    });
-                                                },
-                                                div { class: "dashboard-card-title", if status_snapshot.offline_mode { "Offline" } else { "Online" } }
-                                                div { class: "dashboard-card-subtitle", if status_snapshot.offline_mode { "Switch to online" } else { "Switch to offline" } }
-                                            }
-                                        }
-                                        div { class: "series-card-wrap",
-                                            button {
-                                                onfocus: move |_| selected_index.set(5),
-                                                "aria-disabled": "{busy}",
-                                                class: if selected_snapshot == 5 { "dashboard-card selected" } else { "dashboard-card" },
-                                                onclick: move |_| exit_process(),
-                                                div { class: "dashboard-card-title", "Exit" }
-                                                div { class: "dashboard-card-subtitle", "Close app" }
-                                            }
-                                        }
-                                    }
-                                }
+                        Page::Dashboard | Page::Settings | Page::Series | Page::Volumes => rsx! {
+                            EmberScreen {
+                                page: page_snapshot, status: status_snapshot.clone(), busy: busy(),
+                                reading: home_read.read().clone(), reading_loading: home_loading(),
+                                downloads: downloaded_series.read().clone(), onaction: on_ember_action,
+                                library_folders: libraries.read().clone(), libraries_loading: home_libraries_loading(),
+                                libraries_error: home_libraries_error(), focused_library: home_library_focus(),
+                                series_items: series_snapshot.clone(),
+                                focused_series: selected_series(&series_snapshot, series_selection()).map(|s| s.id),
+                                series_filter: series_filter(),
+                                onfilter: move |only| series_filter.set(only), onseriesfocus: on_series_focus,
+                                active_series: selected_series(&series_snapshot, series_selection()).cloned(),
+                                series_metadata: detail_metadata.read().as_ref().filter(|(id, _)| *id == detail_series_id()).map(|(_, data)| data.clone()).unwrap_or_default(),
+                                volume_items: volumes_snapshot.clone(),
+                                downloading_volume: current_download().map(|(_, id)| id),
+                                focused_volume: volumes_selection().checked_sub(1).and_then(|i| volumes_snapshot.get(i)).map(|v| v.id),
+                                onvolumefocus: on_volume_focus,
                             }
                         },
                         Page::Libraries => rsx! {
@@ -2236,6 +2271,8 @@ fn app() -> Element {
                                                                 match load_series(id).await {
                                                                     Ok(items) => {
                                                                         series.set(items);
+                                                                        series_selection.set(0);
+                                                                        series_filter.set(SeriesFilter::Unread);
                                                                         show_toast(&mut status, &mut toast, &mut toast_generation, format!("Loaded series for library id {id}"));
                                                                         libraries_selection.set(index + 1);
                                                                         selected_index.set(0);
@@ -2247,292 +2284,6 @@ fn app() -> Element {
                                                             });
                                                         },
                                                         div { class: "library-card-title", "{title}" }
-                                                    }
-                                                }
-                                            }
-                                        })}
-                                    }
-                                }
-                            }
-                        },
-                        Page::Series => rsx! {
-                            div { class: "series-page",
-                                div { class: "series-titlebar",
-                                    div {}
-                                    h1 { "Series" }
-                                    div {}
-                                }
-                                if !in_progress_series.is_empty() {
-                                    div { class: "series-section",
-                                        h2 { class: "series-section-title",
-                                            "In progress "
-                                            span { class: "series-count", "({in_progress_series.len()})" }
-                                        }
-                                        div { class: "series-grid",
-                                            div { class: "series-card-wrap",
-                                                button {
-                                                    onfocus: move |_| selected_index.set(0),
-                                                    "aria-disabled": "{busy}",
-                                                    class: if selected_snapshot == 0 { "back-card selected" } else { "back-card" },
-                                                    onclick: move |_| {
-                                                        selected_index.set(libraries_selection());
-                                                        page.set(Page::Libraries);
-                                                    },
-                                                    div { class: "back-card-arrow", "←" }
-                                                    div { class: "back-card-title", "Libraries" }
-                                                }
-                                            }
-                                            {in_progress_series.iter().enumerate().map(|(index, item)| {
-                                                let id = item.id;
-                                                let title = item.title.clone();
-                                                let progress = item.read.clamp(0, 100);
-                                                let cached = item.is_cached;
-                                                let cover_url = crate::local_api::media_url(&format!("series-cover/{id}"));
-                                                let class = if selected_snapshot == index + 1 { "series-card selected" } else { "series-card" };
-                                                let progress_class = if cached {
-                                                    "series-progress-fill cached"
-                                                } else {
-                                                    "series-progress-fill"
-                                                };
-                                                let title_class = if cached {
-                                                    "series-card-title cached"
-                                                } else {
-                                                    "series-card-title"
-                                                };
-                                                rsx! {
-                                                    div { class: "series-card-wrap",
-                                                        button {
-                                                            onfocus: move |_| selected_index.set(index + 1),
-                                                            "aria-disabled": "{busy}",
-                                                            class: "{class}",
-                                                            style: "background-image: url('{cover_url}');",
-                                                            onclick: move |_| {
-                                                                run_ui_action(busy, async move {
-                                                                    match load_volumes(id).await {
-                                                                        Ok(items) => {
-                                                                            let volume_selection = first_non_complete_volume_selection(&items);
-                                                                            volumes.set(items);
-                                                                            show_toast(&mut status, &mut toast, &mut toast_generation, format!("Loaded volumes for series id {id}"));
-                                                                            series_selection.set(index + 1);
-                                                                            selected_index.set(volume_selection);
-                                                                            volumes_selection.set(volume_selection);
-                                                                            page.set(Page::Volumes);
-                                                                        }
-                                                                        Err(err) => show_toast(&mut status, &mut toast, &mut toast_generation, format!("Failed to load volumes: {err}")),
-                                                                    }
-
-                                                                });
-                                                            },
-                                                            div { class: "series-progress",
-                                                                div {
-                                                                    class: "{progress_class}",
-                                                                    style: "width: {progress}%;"
-                                                                }
-                                                            }
-                                                            div { class: "{title_class}",
-                                                                span { "{title}" }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            })}
-                                        }
-                                    }
-                                }
-                                if !completed_series.is_empty() {
-                                    div { class: "series-section",
-                                        h2 { class: "series-section-title",
-                                            "Completed "
-                                            span { class: "series-count", "({completed_series.len()})" }
-                                        }
-                                        div { class: "series-grid",
-                                            if in_progress_series.is_empty() {
-                                                div { class: "series-card-wrap",
-                                                    button {
-                                                        onfocus: move |_| selected_index.set(0),
-                                                        "aria-disabled": "{busy}",
-                                                        class: if selected_snapshot == 0 { "back-card selected" } else { "back-card" },
-                                                        onclick: move |_| {
-                                                            selected_index.set(libraries_selection());
-                                                            page.set(Page::Libraries);
-                                                        },
-                                                        div { class: "back-card-arrow", "←" }
-                                                        div { class: "back-card-title", "Libraries" }
-                                                    }
-                                                }
-                                            }
-                                            {completed_series.iter().enumerate().map(|(index, item)| {
-                                                let id = item.id;
-                                                let title = item.title.clone();
-                                                let progress = item.read.clamp(0, 100);
-                                                let cover_url = crate::local_api::media_url(&format!("series-cover/{id}"));
-                                                let nav_index = in_progress_series.len() + index + 1;
-                                                let class = if selected_snapshot == nav_index { "series-card selected" } else { "series-card" };
-                                                let progress_class = if item.is_cached {
-                                                    "series-progress-fill complete cached"
-                                                } else {
-                                                    "series-progress-fill complete"
-                                                };
-                                                let title_class = if item.is_cached {
-                                                    "series-card-title complete cached"
-                                                } else {
-                                                    "series-card-title complete"
-                                                };
-                                                rsx! {
-                                                    div { class: "series-card-wrap",
-                                                        button {
-                                                            onfocus: move |_| selected_index.set(nav_index),
-                                                            "aria-disabled": "{busy}",
-                                                            class: "{class}",
-                                                            style: "background-image: url('{cover_url}');",
-                                                            onclick: move |_| {
-                                                                run_ui_action(busy, async move {
-                                                                    match load_volumes(id).await {
-                                                                        Ok(items) => {
-                                                                            let volume_selection = first_non_complete_volume_selection(&items);
-                                                                            volumes.set(items);
-                                                                            show_toast(&mut status, &mut toast, &mut toast_generation, format!("Loaded volumes for series id {id}"));
-                                                                            series_selection.set(nav_index);
-                                                                            selected_index.set(volume_selection);
-                                                                            volumes_selection.set(volume_selection);
-                                                                            page.set(Page::Volumes);
-                                                                        }
-                                                                        Err(err) => show_toast(&mut status, &mut toast, &mut toast_generation, format!("Failed to load volumes: {err}")),
-                                                                    }
-
-                                                                });
-                                                            },
-                                                            div { class: "series-progress",
-                                                                div {
-                                                                    class: "{progress_class}",
-                                                                    style: "width: {progress}%;"
-                                                                }
-                                                            }
-                                                            div { class: "{title_class}",
-                                                                span { "{title}" }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            })}
-                                        }
-                                    }
-                                }
-                                if in_progress_series.is_empty() && completed_series.is_empty() {
-                                    div { class: "series-section",
-                                        h2 { class: "series-section-title", "Series" }
-                                        div { class: "series-grid",
-                                            div { class: "series-card-wrap",
-                                                button {
-                                                    onfocus: move |_| selected_index.set(0),
-                                                    "aria-disabled": "{busy}",
-                                                    class: if selected_snapshot == 0 { "back-card selected" } else { "back-card" },
-                                                    onclick: move |_| {
-                                                        selected_index.set(libraries_selection());
-                                                        page.set(Page::Libraries);
-                                                    },
-                                                    div { class: "back-card-arrow", "←" }
-                                                    div { class: "back-card-title", "Libraries" }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        Page::Volumes => rsx! {
-                            div { class: "series-page",
-                                div { class: "series-titlebar",
-                                    div {}
-                                    h1 { "Volumes" }
-                                    div {}
-                                }
-                                div { class: "series-section",
-                                    h2 { class: "series-section-title",
-                                        "Volumes "
-                                        span { class: "series-count", "({volumes_snapshot.len()})" }
-                                    }
-                                    div { class: "series-grid",
-                                        div { class: "series-card-wrap",
-                                            button {
-                                                onfocus: move |_| selected_index.set(0),
-                                                "aria-disabled": "{busy}",
-                                                class: if selected_snapshot == 0 { "back-card selected" } else { "back-card" },
-                                                onclick: move |_| {
-                                                    run_ui_action(busy, async move {
-                                                        let library_id = current_series_library_id(
-                                                            &series.read(),
-                                                            &libraries.read(),
-                                                            libraries_selection(),
-                                                        );
-                                                        if let Some(library_id) = library_id {
-                                                            match load_series(library_id).await {
-                                                                Ok(items) => replace_series(items, series, series_selection, selected_index, page),
-                                                                Err(err) => show_toast(&mut status, &mut toast, &mut toast_generation, format!("Failed to refresh series: {err}")),
-                                                            }
-                                                        }
-                                                        selected_index.set(series_selection());
-                                                        page.set(Page::Series);
-
-                                                    });
-                                                },
-                                                div { class: "back-card-arrow", "←" }
-                                                div { class: "back-card-title", "Series" }
-                                            }
-                                        }
-                                        {volumes_snapshot.iter().enumerate().map(|(index, volume)| {
-                                            let cover_id = volume.id;
-                                            let title = volume.title.clone();
-                                            let reader_item = volume.clone();
-                                            let progress = if volume.pages > 0 {
-                                                ((volume.read * 100) / volume.pages).clamp(0, 100)
-                                            } else {
-                                                0
-                                            };
-                                            let complete = volume.pages > 0 && volume.read >= volume.pages;
-                                            let cached = volume.is_cached;
-                                            let cover_url = crate::local_api::media_url(&format!("volumes-cover/{cover_id}"));
-                                            let class = if selected_snapshot == index + 1 { "series-card selected" } else { "series-card" };
-                                            let progress_class = if complete {
-                                                "series-progress-fill complete"
-                                            } else if cached {
-                                                "series-progress-fill cached"
-                                            } else {
-                                                "series-progress-fill"
-                                            };
-                                            let title_class = if complete {
-                                                "series-card-title complete"
-                                            } else if cached {
-                                                "series-card-title cached"
-                                            } else {
-                                                "series-card-title"
-                                            };
-                                            rsx! {
-                                                div { class: "series-card-wrap",
-                                                    button {
-                                                        onfocus: move |_| selected_index.set(index + 1),
-                                                        "aria-disabled": "{busy}",
-                                                        class: "{class}",
-                                                        style: "background-image: url('{cover_url}');",
-                                                        onclick: move |_| {
-                                                            volumes_selection.set(index + 1);
-                                                            let start_page = initial_reader_page(&reader_item);
-                                                            reader_page.set(start_page);
-                                                            reader_first_page.set(start_page);
-                                                            reader_loaded_until.set(reader_batch_end(start_page, reader_item.pages));
-                                                            reader_slider_visible.set(false);
-                                                            reader_volume.set(Some(reader_item.clone()));
-                                                            page.set(Page::Reader);
-                                                        },
-                                                        div { class: "series-progress",
-                                                            div {
-                                                                class: "{progress_class}",
-                                                                style: "width: {progress}%;"
-                                                            }
-                                                        }
-                                                        div { class: "{title_class}",
-                                                            span { "{title}" }
-                                                        }
                                                     }
                                                 }
                                             }
@@ -2689,123 +2440,6 @@ fn app() -> Element {
                                 }
                             }
                         },
-                        Page::Settings => rsx! {
-                            section { class: "settings-page", "aria-labelledby": "settings-title",
-                                header { class: "settings-header",
-                                    div {
-                                        h1 { id: "settings-title", "Settings" }
-                                        p { class: "settings-description", "Manage your Kavita connection." }
-                                    }
-                                    div {
-                                        class: if status_snapshot.offline_mode { "settings-connection offline" } else { "settings-connection" },
-                                        role: "status",
-                                        "aria-live": "polite",
-                                        span { class: "settings-connection-dot", "aria-hidden": "true" }
-                                        if status_snapshot.offline_mode { "Offline" } else { "Connected" }
-                                    }
-                                }
-                                form {
-                                    class: "settings-card",
-                                    onsubmit: move |event| {
-                                        event.prevent_default();
-                                        let creds = ConnectionCreds {
-                                            ip: server_ip(), username: username(),
-                                            password: password(), api_key: api_key(),
-                                        };
-                                        run_ui_action(busy, connect_settings(creds, status, toast, toast_generation));
-                                    },
-                                    div { class: "settings-card-header",
-                                        h2 { "Kavita server" }
-                                        p { class: "settings-account",
-                                            if status_snapshot.offline_mode {
-                                                "Enter your server details to connect."
-                                            } else if !status_snapshot.logged_as.is_empty() {
-                                                "Signed in as {status_snapshot.logged_as}"
-                                            } else {
-                                                "Your library connection settings."
-                                            }
-                                        }
-                                    }
-                                    div { class: "settings-fields",
-                                        div { class: "settings-field",
-                                            label { r#for: "settings-server", "Server address" }
-                                            input {
-                                                id: "settings-server", class: "settings-input",
-                                                r#type: "text", name: "server",
-                                                "aria-describedby": "settings-server-hint",
-                                                readonly: busy(),
-                                                onkeydown: move |event| event.stop_propagation(),
-                                                value: "{server_ip.read()}",
-                                                placeholder: "192.168.1.100:5000",
-                                                autocomplete: "off", spellcheck: "false",
-                                                oninput: move |event| server_ip.set(event.value()),
-                                            }
-                                            p { id: "settings-server-hint", class: "settings-hint", "Use host:port, without http://." }
-                                        }
-                                        div { class: "settings-field",
-                                            label { r#for: "settings-username", "Username" }
-                                            input {
-                                                id: "settings-username", class: "settings-input",
-                                                r#type: "text", name: "username", autocomplete: "username",
-                                                readonly: busy(), spellcheck: "false",
-                                                onkeydown: move |event| event.stop_propagation(),
-                                                value: "{username.read()}", placeholder: "Your Kavita username",
-                                                oninput: move |event| username.set(event.value()),
-                                            }
-                                        }
-                                        div { class: "settings-field",
-                                            label { r#for: "settings-password", "Password" }
-                                            input {
-                                                id: "settings-password", class: "settings-input",
-                                                r#type: "password", name: "password", autocomplete: "current-password",
-                                                "aria-describedby": "settings-credential-note",
-                                                readonly: busy(),
-                                                onkeydown: move |event| event.stop_propagation(),
-                                                value: "{password.read()}", placeholder: "Enter a new password",
-                                                oninput: move |event| password.set(event.value()),
-                                            }
-                                        }
-                                        div { class: "settings-field",
-                                            label { r#for: "settings-api-key", "API key" }
-                                            input {
-                                                id: "settings-api-key", class: "settings-input",
-                                                r#type: "password", name: "api_key", autocomplete: "off",
-                                                "aria-describedby": "settings-credential-note",
-                                                readonly: busy(),
-                                                onkeydown: move |event| event.stop_propagation(),
-                                                value: "{api_key.read()}", placeholder: "Enter a new API key",
-                                                oninput: move |event| api_key.set(event.value()),
-                                            }
-                                        }
-                                    }
-                                    p { id: "settings-credential-note", class: "settings-credential-note",
-                                        "Leave Password and API key blank to keep your saved credentials."
-                                    }
-                                    div { class: "settings-actions",
-                                        button {
-                                            r#type: "submit",
-                                            onfocus: move |_| selected_index.set(0),
-                                            "aria-disabled": "{busy}",
-                                            class: if selected_snapshot == 0 { "settings-button settings-save selected" } else { "settings-button settings-save" },
-                                            if busy() { "Connecting…" } else { "Save & connect" }
-                                        }
-                                        button {
-                                            r#type: "button",
-                                            onfocus: move |_| selected_index.set(1),
-                                            "aria-disabled": "{busy}",
-                                            class: if selected_snapshot == 1 { "settings-button selected" } else { "settings-button" },
-                                            onclick: move |_| {
-                                                if !busy() {
-                                                    selected_index.set(dashboard_selection());
-                                                    page.set(Page::Dashboard);
-                                                }
-                                            },
-                                            "Back to dashboard"
-                                        }
-                                    }
-                                }
-                            }
-                        },
                     }
                 }
             }
@@ -2817,13 +2451,20 @@ pub fn run_ui(kavita: SharedKavita) {
     let _ = KAVITA.set(kavita);
     let window = WindowBuilder::new()
         .with_title("Manga4Deck")
-        .with_inner_size(LogicalSize::new(1280.0, 720.0))
+        .with_inner_size(LogicalSize::new(1280.0, 800.0))
         .with_always_on_top(false);
     #[cfg(target_os = "linux")]
     let window = window.with_decorations(false);
 
+    // Embed the font once in the native document. This also supports `cargo run`
+    // and standalone binaries without a separate asset bundling step.
+    let inter = base64::engine::general_purpose::STANDARD
+        .encode(include_bytes!("../assets/InterVariable.woff2"));
+    let head = format!(
+        "<style>@font-face {{ font-family: Inter; src: url(data:font/woff2;base64,{inter}) format('woff2'); font-weight: 100 900; font-display: swap; }}</style>"
+    );
+    let config = Config::new().with_window(window).with_custom_head(head);
     // macOS routes standard clipboard shortcuts through the native Edit menu.
-    let config = Config::new().with_window(window);
     #[cfg(not(target_os = "macos"))]
     let config = config.with_menu(None);
 

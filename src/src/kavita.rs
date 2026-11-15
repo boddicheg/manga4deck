@@ -36,6 +36,48 @@ fn reader_image_url(
     Ok(url)
 }
 
+fn cache_request_error(error: ureq::Error, api_key: &str, token: &str) -> String {
+    match error {
+        ureq::Error::Status(status, response) => {
+            use std::io::Read;
+            // Only show Kavita's message, not its stack trace or request URL.
+            let mut body = Vec::new();
+            let _ = response
+                .into_reader()
+                .take(16 * 1024)
+                .read_to_end(&mut body);
+            let message = serde_json::from_slice::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|data| data["message"].as_str().map(str::to_owned));
+            let Some(mut message) = message else {
+                return format!("Kavita returned HTTP {status}");
+            };
+            for secret in [api_key, token].into_iter().filter(|s| !s.is_empty()) {
+                message = message.replace(secret, "[redacted]");
+                if let Ok(url) =
+                    reqwest::Url::parse_with_params("http://localhost/", &[("key", secret)])
+                {
+                    if let Some(encoded) = url.query().and_then(|q| q.strip_prefix("key=")) {
+                        message = message.replace(encoded, "[redacted]");
+                    }
+                }
+            }
+            let message: String = message
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(512)
+                .collect();
+            if message.trim().is_empty() {
+                format!("Kavita returned HTTP {status}")
+            } else {
+                format!("Kavita returned HTTP {status}: {}", message.trim())
+            }
+        }
+        // Displaying the whole ureq error would expose the API key in the URL.
+        ureq::Error::Transport(error) => format!("Kavita page request failed ({})", error.kind()),
+    }
+}
+
 fn reader_image_extension(bytes: &[u8]) -> Result<&'static str, Box<dyn std::error::Error>> {
     let format =
         image::guess_format(bytes).map_err(|_| "Kavita did not return a rendered page image")?;
@@ -308,13 +350,13 @@ pub struct ConnectionCreds {
     pub api_key: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Library {
     pub id: i32,
     pub title: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Series {
     pub id: i32,
     pub library_id: i32,
@@ -322,6 +364,50 @@ pub struct Series {
     pub read: i32,
     pub pages: i32,
     pub is_cached: bool,
+    /// Server timestamp for the latest content addition (not reading activity).
+    #[serde(default)]
+    pub last_updated: Option<String>,
+}
+
+fn series_last_updated(series: &serde_json::Value) -> Option<String> {
+    // Current Kavita exposes UTC; older releases expose the server-local date.
+    // .NET's default DateTime means the date is unknown.
+    ["lastChapterAddedUtc", "lastChapterAdded"]
+        .into_iter()
+        .filter_map(|field| series[field].as_str())
+        .map(str::trim)
+        .find(|date| !date.is_empty() && !date.starts_with("0001-"))
+        .map(str::to_owned)
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct SeriesMetadata {
+    pub authors: Vec<String>,
+    pub genres: Vec<String>,
+}
+
+impl SeriesMetadata {
+    fn from_server(data: &serde_json::Value) -> Self {
+        let names = |field: &str, name: &str| {
+            let mut result = Vec::new();
+            for value in data[field].as_array().into_iter().flatten() {
+                if let Some(value) = value[name]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    if !result.iter().any(|existing| existing == value) {
+                        result.push(value.to_string());
+                    }
+                }
+            }
+            result
+        };
+        Self {
+            authors: names("writers", "name"),
+            genres: names("genres", "title"),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -337,6 +423,7 @@ pub struct Kavita {
     // --- Caching fields ---
     pub caching_queue: Arc<StdMutex<VecDeque<i32>>>, // series_id queue
     pub caching_current_series: Arc<StdMutex<Option<i32>>>,
+    pub caching_current_volume: Arc<StdMutex<Option<(i32, i32)>>>,
     pub caching_cancelled_series: Arc<StdMutex<HashSet<i32>>>,
     pub caching_thread_handle: Arc<StdMutex<Option<thread::JoinHandle<()>>>>,
     // --- WebSocket fields ---
@@ -349,7 +436,7 @@ pub struct SeriesCover {
     pub file: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Volume {
     /// Kavita volume ID, or a negative chapter ID for an individual chapter/book.
     pub id: i32,
@@ -412,6 +499,7 @@ impl Kavita {
             progress_upload_lock: Arc::new(tokio::sync::Mutex::new(())),
             caching_queue: Arc::new(StdMutex::new(VecDeque::new())),
             caching_current_series: Arc::new(StdMutex::new(None)),
+            caching_current_volume: Arc::new(StdMutex::new(None)),
             caching_cancelled_series: Arc::new(StdMutex::new(HashSet::new())),
             caching_thread_handle: Arc::new(StdMutex::new(None)),
             ws_sender: None,
@@ -619,6 +707,30 @@ impl Kavita {
 
     // -------------------------------------------------------------------------
     // Series methods
+    pub async fn get_series_metadata(&self, series_id: i32) -> SeriesMetadata {
+        if !self.offline_mode {
+            let request = reqwest::Client::new()
+                .get(format!("http://{}/api/series/metadata", self.ip))
+                .query(&[("seriesId", series_id)])
+                .bearer_auth(&self.token)
+                .timeout(Duration::from_secs(8))
+                .send()
+                .await;
+            if let Ok(response) = request {
+                if response.status().is_success() {
+                    if let Ok(data) = response.json::<serde_json::Value>().await {
+                        if data.is_object() {
+                            let metadata = SeriesMetadata::from_server(&data);
+                            let _ = self.db.save_series_metadata(series_id, &metadata);
+                            return metadata;
+                        }
+                    }
+                }
+            }
+        }
+        self.db.get_series_metadata(series_id).unwrap_or_default()
+    }
+
     pub async fn pull_series(&self, library_id: &i32) -> Result<(), Box<dyn std::error::Error>> {
         // let mut result = Vec::new();
         if !self.offline_mode {
@@ -662,6 +774,7 @@ impl Kavita {
                     },
                     pages: v["pages"].as_i64().unwrap_or(0) as i32,
                     is_cached: false,
+                    last_updated: series_last_updated(v),
                 })
                 .collect();
             for series in series {
@@ -690,8 +803,7 @@ impl Kavita {
                 .filter(|s| self.is_series_cached(s.id))
                 .collect();
         }
-        // sort series by title and return sorted series
-        series.sort_by_key(|s| s.title.clone());
+        // The database orders by the cached server update date, including offline.
         Ok(series)
     }
 
@@ -1287,6 +1399,7 @@ impl Kavita {
             let db = self.db.clone();
             let queue = self.caching_queue.clone();
             let current_series = self.caching_current_series.clone();
+            let current_volume = self.caching_current_volume.clone();
             let cancelled_series = self.caching_cancelled_series.clone();
             let ip = self.ip.clone();
             let api_key = self.api_key.clone();
@@ -1297,6 +1410,7 @@ impl Kavita {
                     db,
                     queue,
                     current_series,
+                    current_volume,
                     cancelled_series,
                     ip,
                     api_key,
@@ -1330,11 +1444,18 @@ impl Kavita {
             let mut cancelled = self.caching_cancelled_series.lock().unwrap();
             cancelled.insert(series_id);
         }
+        let mut current = self.caching_current_volume.lock().unwrap();
+        if current.is_some_and(|(id, _)| id == series_id) {
+            *current = None;
+        }
         info(&format!("Requested cache stop for series {}", series_id));
     }
 
     // Remove cached volumes for a series and remove from caching queue
     pub fn remove_series_cache(&self, series_id: i32) -> Result<(), Box<dyn std::error::Error>> {
+        // Cancel before collecting files. Page writes check this flag under the
+        // same lock, so in-flight requests cannot recreate removed downloads.
+        self.stop_cache_serie(series_id);
         // Check if series has cached volumes
         if !self.db.has_cached_volumes(series_id) {
             return Ok(()); // Nothing to remove
@@ -1353,16 +1474,6 @@ impl Kavita {
         // Delete from database
         self.db.delete_series_cache(series_id)?;
 
-        // Remove from caching queue if present
-        {
-            let mut queue = self.caching_queue.lock().unwrap();
-            queue.retain(|&id| id != series_id);
-        }
-        {
-            let mut cancelled = self.caching_cancelled_series.lock().unwrap();
-            cancelled.insert(series_id);
-        }
-
         info(&format!(
             "Removed cache for series {} ({} files)",
             series_id,
@@ -1377,6 +1488,7 @@ fn cache_serie_threaded(
     db: Database,
     queue: Arc<StdMutex<VecDeque<i32>>>,
     current_series: Arc<StdMutex<Option<i32>>>,
+    current_volume: Arc<StdMutex<Option<(i32, i32)>>>,
     cancelled_series: Arc<StdMutex<HashSet<i32>>>,
     ip: String,
     api_key: String,
@@ -1384,13 +1496,23 @@ fn cache_serie_threaded(
     ws_sender: Option<Arc<broadcast::Sender<serde_json::Value>>>,
 ) {
     use std::io::Read;
-    use ureq;
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(60))
+        .timeout_write(Duration::from_secs(10))
+        .build();
     loop {
         let series_id = {
             let mut q = queue.lock().unwrap();
             q.pop_front()
         };
         if let Some(series_id) = series_id {
+            let series_title = db
+                .get_series_title(series_id)
+                .ok()
+                .flatten()
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or_else(|| "this series".into());
             {
                 let mut current = current_series.lock().unwrap();
                 *current = Some(series_id);
@@ -1404,9 +1526,10 @@ fn cache_serie_threaded(
             if let Some(sender) = &ws_sender {
                 let start_msg = serde_json_json!({
                     "event": "caching_start",
-                    "message": format!("Starting to cache series {}", series_id),
+                    "message": format!("Starting to cache {}", series_title),
                     "data": {
-                        "series_id": series_id
+                        "series_id": series_id,
+                        "series_title": series_title
                     }
                 });
                 let _ = sender.send(start_msg);
@@ -1417,6 +1540,8 @@ fn cache_serie_threaded(
 
             let total_volumes = volumes.len();
             let mut cached_volumes = 0;
+            let mut failed_volumes = 0;
+            let mut last_failure = String::new();
             let mut cancelled = false;
 
             for volume in volumes {
@@ -1427,6 +1552,7 @@ fn cache_serie_threaded(
                 if volume.pages > 0 && volume.read >= volume.pages {
                     continue; // Skip fully read volumes
                 }
+                *current_volume.lock().unwrap() = Some((series_id, volume.id));
                 info(&format!(
                     "Start caching volume {} (title: {}) in series {}",
                     volume.id, volume.title, series_id
@@ -1435,17 +1561,19 @@ fn cache_serie_threaded(
                     let volume_start_msg = serde_json_json!({
                         "event": "volume_caching_start",
                         "message": format!(
-                            "Start caching volume {} (title: {}) in series {}",
-                            volume.id, volume.title, series_id
+                            "Caching {} from {}",
+                            volume.title, series_title
                         ),
                         "data": {
                             "series_id": series_id,
+                            "series_title": series_title,
                             "volume_id": volume.id,
                             "volume_title": volume.title
                         }
                     });
                     let _ = sender.send(volume_start_msg);
                 }
+                let mut failure = None;
                 if let Some((chapter_id, pages)) = db.get_volume_chapter_and_pages(volume.id) {
                     for page in 0..pages {
                         if cancelled_series.lock().unwrap().contains(&series_id) {
@@ -1455,13 +1583,20 @@ fn cache_serie_threaded(
                         if cached_reader_picture(&db, chapter_id, page).is_none() {
                             let result = (|| -> Result<(), Box<dyn std::error::Error>> {
                                 let url = reader_image_url(&ip, &api_key, chapter_id, page)?;
-                                let response = ureq::get(url.as_str())
+                                let response = agent
+                                    .get(url.as_str())
                                     .set("Authorization", &format!("Bearer {token}"))
                                     .set("Accept", "image/*")
                                     .call()
-                                    .map_err(|_| "Kavita page request failed")?;
+                                    .map_err(|error| {
+                                        cache_request_error(error, &api_key, &token)
+                                    })?;
                                 let mut bytes = Vec::new();
                                 response.into_reader().read_to_end(&mut bytes)?;
+                                let cancelled = cancelled_series.lock().unwrap();
+                                if cancelled.contains(&series_id) {
+                                    return Ok(());
+                                }
                                 cache_reader_picture(
                                     &db,
                                     &cache_folder_path(),
@@ -1469,21 +1604,38 @@ fn cache_serie_threaded(
                                     page,
                                     &bytes,
                                 )?;
+                                drop(cancelled);
                                 Ok(())
                             })();
                             if let Err(err) = result {
                                 info(&format!(
                                     "Failed to cache chapter {chapter_id}, page {page}: {err}"
                                 ));
+                                failure = Some(err.to_string());
+                                // An extraction/auth/network failure is not fixed by
+                                // requesting every remaining page of the same volume.
+                                break;
                             }
                         }
                     }
                 }
+                *current_volume.lock().unwrap() = None;
+                cancelled |= cancelled_series.lock().unwrap().contains(&series_id);
                 if cancelled {
                     break;
                 }
-                if !db.is_volume_fully_cached(volume.id) {
+                if failure.is_some() || !db.is_volume_fully_cached(volume.id) {
+                    failed_volumes += 1;
+                    let reason = failure.unwrap_or_else(|| "Not all pages were saved".into());
+                    last_failure = format!("{}: {}", volume.title, reason);
                     info(&format!("Volume {} is only partially cached", volume.id));
+                    if let Some(sender) = &ws_sender {
+                        let _ = sender.send(serde_json_json!({
+                            "event": "volume_caching_failed",
+                            "message": format!("Could not download {} from {}: {}", volume.title, series_title, reason),
+                            "data": { "series_id": series_id, "volume_id": volume.id, "error": reason }
+                        }));
+                    }
                     continue;
                 }
                 info(&format!(
@@ -1497,11 +1649,12 @@ fn cache_serie_threaded(
                     let volume_msg = serde_json_json!({
                         "event": "volume_cached",
                         "message": format!(
-                            "Finished caching volume {} (title: {}) in series {}",
-                            volume.id, volume.title, series_id
+                            "Finished caching {} from {}",
+                            volume.title, series_title
                         ),
                         "data": {
                             "series_id": series_id,
+                            "series_title": series_title,
                             "volume_id": volume.id,
                             "volume_title": volume.title,
                             "progress": {
@@ -1530,13 +1683,24 @@ fn cache_serie_threaded(
                 let end_msg = serde_json_json!({
                     "event": if cancelled { "caching_cancelled" } else { "caching_end" },
                     "message": if cancelled {
-                        format!("Stopped caching series {}", series_id)
+                        format!("Stopped caching {}", series_title)
+                    } else if failed_volumes > 0 {
+                        // Keep the cause visible: this final toast replaces the
+                        // individual volume's error notification.
+                        if failed_volumes == 1 {
+                            format!("Download incomplete for {}. {}", series_title, last_failure)
+                        } else {
+                            format!("Download incomplete for {}: {} volumes failed. {}", series_title, failed_volumes, last_failure)
+                        }
                     } else {
-                        format!("Finished caching whole series {}", series_id)
+                        format!("Finished caching {}", series_title)
                     },
                     "data": {
                         "series_id": series_id,
+                        "series_title": series_title,
                         "volumes_cached": cached_volumes,
+                        "volumes_failed": failed_volumes,
+                        "success": !cancelled && failed_volumes == 0,
                         "total_volumes": total_volumes
                     }
                 });
@@ -1579,6 +1743,7 @@ mod tests {
             progress_upload_lock: Arc::new(tokio::sync::Mutex::new(())),
             caching_queue: Arc::new(StdMutex::new(VecDeque::new())),
             caching_current_series: Arc::new(StdMutex::new(None)),
+            caching_current_volume: Arc::new(StdMutex::new(None)),
             caching_cancelled_series: Arc::new(StdMutex::new(HashSet::new())),
             caching_thread_handle: Arc::new(StdMutex::new(None)),
             ws_sender: None,

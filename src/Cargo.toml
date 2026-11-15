@@ -1,11 +1,12 @@
 [package]
 name = "manga4deck"
-version = "0.7.0"
+version = "0.8.0"
 description = "Manga reader for Kavita on Steam Deck"
 authors = ["boddicheg"]
 edition = "2021"
 
 [dependencies]
+base64 = "0.22"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.0", features = ["full"] }
