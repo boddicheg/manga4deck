@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex};
 
 // Removed unused import
 
-use crate::kavita::{Library, MangaPicture, Series, SeriesCover, Volume, VolumeCover};
+use crate::kavita::{
+    Library, MangaPicture, Series, SeriesCover, SeriesMetadata, Volume, VolumeCover,
+};
 
 pub(crate) fn valid_picture_file(path: &str) -> bool {
     image::ImageReader::open(path)
@@ -47,6 +49,10 @@ impl Database {
         if !has_update_date {
             conn.execute("ALTER TABLE series ADD COLUMN last_updated TEXT", [])?;
         }
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS series_metadata (series_id INTEGER PRIMARY KEY, data TEXT NOT NULL)",
+            [],
+        )?;
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS series_cover (series_id INTEGER PRIMARY KEY, file TEXT)",
@@ -114,6 +120,7 @@ impl Database {
         // conn.execute("DELETE FROM settings", [])?;
         conn.execute("DELETE FROM libraries", [])?;
         conn.execute("DELETE FROM series", [])?;
+        conn.execute("DELETE FROM series_metadata", [])?;
         conn.execute("DELETE FROM series_cover", [])?;
         conn.execute("DELETE FROM volumes", [])?;
         conn.execute("DELETE FROM volumes_cover", [])?;
@@ -153,6 +160,32 @@ impl Database {
     }
     // -------------------------------------------------------------------------
     // Series methods
+    pub fn save_series_metadata(
+        &self,
+        series_id: i32,
+        metadata: &SeriesMetadata,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let data = serde_json::to_string(metadata)?;
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO series_metadata (series_id, data) VALUES (?, ?) ON CONFLICT(series_id) DO UPDATE SET data = excluded.data",
+            rusqlite::params![series_id, data],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_series_metadata(
+        &self,
+        series_id: i32,
+    ) -> Result<SeriesMetadata, Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT data FROM series_metadata WHERE series_id = ?")?;
+        match stmt.query_row([series_id], |row| row.get::<_, String>(0)) {
+            Ok(data) => Ok(serde_json::from_str(&data)?),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(SeriesMetadata::default()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     pub fn get_series(&self, library_id: &i32) -> Result<Vec<Series>, Box<dyn std::error::Error>> {
         let conn = self.conn.lock().unwrap();
         // Parse dates instead of comparing text: UTC offsets and fractional
@@ -173,6 +206,22 @@ impl Database {
             })
         })?;
         Ok(series.collect::<Result<Vec<Series>, rusqlite::Error>>()?)
+    }
+
+    pub fn get_series_title(
+        &self,
+        series_id: i32,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
+        let conn = self.conn.lock().unwrap();
+        match conn.query_row(
+            "SELECT title FROM series WHERE id = ?",
+            [series_id],
+            |row| row.get(0),
+        ) {
+            Ok(title) => Ok(Some(title)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub fn get_series_library_id(

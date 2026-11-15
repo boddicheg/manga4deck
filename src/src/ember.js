@@ -9,6 +9,7 @@ if (root) await new Promise(resolve => {
     let returnFocus = null;
     let lastFolder = null;
     let lastSeries = null;
+    let lastVolume = null;
     let previousPadKeys = new Set();
     const repeats = new Map();
     const visible = el => !el.disabled && el.getClientRects().length > 0;
@@ -28,13 +29,15 @@ if (root) await new Promise(resolve => {
             carousel.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
         } else el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
     };
-    const preferred = () => scope().querySelector('.ember-series-card[data-autofocus="true"]') || scope().querySelector('.ember-folder[data-autofocus="true"]') || scope().querySelector('[data-autofocus="true"]') || controls()[0];
+    const preferred = () => scope().querySelector('.ember-volume-row[data-autofocus="true"]') || scope().querySelector('.ember-series-card[data-autofocus="true"]') || scope().querySelector('.ember-folder[data-autofocus="true"]') || scope().querySelector('[data-autofocus="true"]') || controls()[0];
     const onFocus = () => {
         const folder = document.activeElement?.closest('.ember-folder');
         if (folder) lastFolder = folder;
         root.dataset.folderFocus = String(!!folder);
         const card = document.activeElement?.closest('.ember-series-card');
         if (card) lastSeries = card;
+        const volume = document.activeElement?.closest('.ember-volume-row');
+        if (volume) lastVolume = volume;
         root.dataset.libraryFocus = card ? 'series' : 'filters';
     };
     const updateArrows = () => {
@@ -44,6 +47,10 @@ if (root) await new Promise(resolve => {
         root.querySelector('[data-library-scroll="next"]')?.setAttribute('aria-disabled', String(rail.scrollLeft + rail.clientWidth >= rail.scrollWidth - 1));
     };
     const onCarouselClick = event => {
+        if (event.target.closest('[data-series-download]')) {
+            if (!event.target.closest('button').disabled) root.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', code: 'F2', bubbles: true, cancelable: true }));
+            return;
+        }
         const button = event.target.closest('[data-library-scroll]');
         const rail = root.querySelector('.ember-library-carousel');
         if (!button || !rail || button.disabled || button.getAttribute('aria-disabled') === 'true') return;
@@ -64,7 +71,7 @@ if (root) await new Promise(resolve => {
         if (!root.isConnected) { cleanup(); return; }
         if (root.getAttribute('aria-busy') === 'true') return;
         const dialog = root.querySelector('.ember-dialog');
-        const view = root.dataset.emberView;
+        const view = `${root.dataset.emberView}:${root.dataset.seriesDetailId || ''}`;
         if (dialog !== previousDialog) {
             if (dialog) {
                 returnFocus = document.activeElement;
@@ -92,6 +99,30 @@ if (root) await new Promise(resolve => {
         const filter = current.closest('.ember-series-filter');
         const activeFilter = root.querySelector('.ember-series-filter[aria-pressed="true"]');
         const chosenSeries = lastSeries?.isConnected ? lastSeries : root.querySelector('.ember-series-card[data-autofocus="true"], .ember-series-card');
+        if (root.dataset.emberView === 'Series detail') {
+            const rows = [...root.querySelectorAll('.ember-volume-row')];
+            const row = current.closest('.ember-volume-row');
+            const download = root.querySelector('[data-series-download]');
+            const breadcrumb = root.querySelector('[data-detail-breadcrumb]');
+            const chosen = lastVolume?.isConnected ? lastVolume : root.querySelector('.ember-volume-row[data-autofocus="true"], .ember-volume-row');
+            if (row) {
+                if (key === 'ArrowDown') focus(rows[rows.indexOf(row) + 1]);
+                else if (key === 'ArrowUp') focus(rows[rows.indexOf(row) - 1] || root.querySelector('[data-nav="1"]'));
+                else if (key === 'ArrowLeft') focus(download);
+                return;
+            }
+            if (current === download) {
+                if (key === 'ArrowRight') focus(chosen);
+                else if (key === 'ArrowUp') focus(breadcrumb);
+                return;
+            }
+            if (current === breadcrumb) {
+                if (key === 'ArrowDown' || key === 'ArrowRight') focus(chosen || download);
+                else if (key === 'ArrowUp') focus(root.querySelector('[data-nav="1"]'));
+                return;
+            }
+            if (current.closest('.ember-nav') && key === 'ArrowDown') { focus(chosen || breadcrumb); return; }
+        }
         if (library) {
             if (seriesCard) {
                 if (key === 'ArrowLeft' || key === 'ArrowRight') {
@@ -157,8 +188,23 @@ if (root) await new Promise(resolve => {
         if (!controls().includes(document.activeElement)) updateFocus();
         const dialog = root.querySelector('.ember-dialog');
         const libraryCard = root.dataset.emberView === 'Your library' && document.activeElement?.closest('.ember-series-card');
+        const seriesDetail = root.dataset.emberView === 'Series detail';
         // Preserve the app's existing F2 download implementation and its status updates.
         if (!dialog && libraryCard && key === 'F2') return;
+        if (!dialog && seriesDetail && key === 'F2') return;
+        if (!dialog && seriesDetail && key === 'F1') {
+            if (document.activeElement?.matches('.ember-volume-row')) return;
+            event.preventDefault(); event.stopPropagation(); return;
+        }
+        if (!dialog && seriesDetail && key.toLowerCase() === 'y') {
+            if (document.activeElement?.matches('.ember-volume-row')) {
+                document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'F1', code: 'F1', bubbles: true, cancelable: true }));
+            }
+            event.preventDefault(); event.stopPropagation(); return;
+        }
+        if (!dialog && seriesDetail && key.toLowerCase() === 'x') {
+            event.preventDefault(); event.stopPropagation(); return;
+        }
         if (!dialog && libraryCard && key.toLowerCase() === 'x') {
             document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', code: 'F2', bubbles: true, cancelable: true }));
             event.preventDefault(); event.stopPropagation(); return;
@@ -175,6 +221,7 @@ if (root) await new Promise(resolve => {
         } else if (key === 'Escape' || key === 'Backspace' || key.toLowerCase() === 'b') {
             const back = scope().querySelector('[data-back="true"]');
             if (back) back.click();
+            else if (seriesDetail) root.querySelector('.ember-detail-back')?.click();
             else if (root.dataset.emberView === 'Your library') {
                 if (libraryCard) focus(root.querySelector('.ember-series-filter[aria-pressed="true"]'));
                 else root.querySelector('.ember-series-back')?.click();
@@ -243,7 +290,7 @@ if (root) await new Promise(resolve => {
         updateArrows();
     });
     resize.observe(root);
-    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-busy', 'data-ember-view', 'disabled'] });
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-busy', 'data-ember-view', 'data-series-detail-id', 'disabled'] });
     updateFocus();
     document.fonts.ready.then(() => { if (root.isConnected) updateTitles(); });
     frame = requestAnimationFrame(poll);
