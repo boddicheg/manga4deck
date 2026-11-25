@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use base64::Engine;
 use dioxus::desktop::{tao::dpi::LogicalSize, Config, WindowBuilder};
+use dioxus::dioxus_core::Task;
 use dioxus::prelude::*;
 use once_cell::sync::{Lazy, OnceCell};
 use tokio::sync::Mutex;
@@ -782,6 +783,7 @@ fn app() -> Element {
     let busy = use_signal(|| false);
     let mut page = use_signal(|| Page::Dashboard);
     let mut selected_library = use_signal(|| None::<i32>);
+    let mut gallery_refresh = use_signal(|| None::<Task>);
     let mut series_selection = use_signal(|| 0usize);
     let mut series_filter = use_signal(SeriesFilter::default);
     let mut volumes_selection = use_signal(|| 0usize);
@@ -1133,6 +1135,9 @@ fn app() -> Element {
             return;
         }
         run_ui_action(busy, async move {
+            if let Some(task) = gallery_refresh.write().take() {
+                task.cancel();
+            }
             match action {
                 EmberAction::Home => page.set(Page::Dashboard),
                 EmberAction::Settings => page.set(Page::Settings),
@@ -1195,18 +1200,28 @@ fn app() -> Element {
                     page.set(Page::Reader);
                 }
                 EmberAction::BackFromSeries => {
-                    if let Some(id) = selected_library() {
-                        match load_series(id).await {
-                            Ok(items) => replace_series(items, series, series_selection),
-                            Err(err) => show_toast(
-                                &mut status,
-                                &mut toast,
-                                &mut toast_generation,
-                                format!("Failed to refresh series: {err}"),
-                            ),
-                        }
-                    }
                     page.set(Page::Series);
+                    if let Some(id) = selected_library() {
+                        let task = spawn(async move {
+                            let result =
+                                tokio::time::timeout(Duration::from_secs(20), load_series(id))
+                                    .await;
+                            if *page.peek() != Page::Series
+                                || *selected_library.peek() != Some(id)
+                                || *busy.peek()
+                            {
+                                return;
+                            }
+                            match result {
+                                Ok(Ok(items)) => replace_series(items, series, series_selection),
+                                Ok(Err(err)) => {
+                                    push_toast(format!("Failed to refresh series: {err}"))
+                                }
+                                Err(_) => push_toast("Refreshing the library timed out.".into()),
+                            }
+                        });
+                        gallery_refresh.set(Some(task));
+                    }
                 }
                 EmberAction::RefreshLibraries => {
                     libraries_refresh.set(libraries_refresh().wrapping_add(1));

@@ -799,18 +799,21 @@ impl Kavita {
         if !self.offline_mode {
             self.pull_series(library_id).await?;
         }
-        let mut series = self.db.get_series(library_id)?;
-        for item in &mut series {
-            item.is_cached = self.is_series_cached(item.id);
-        }
-        // return only cached series
-        if self.offline_mode {
-            series = series
-                .into_iter()
-                .filter(|s| self.is_series_cached(s.id))
-                .collect();
-        }
-        // The database orders by the cached server update date, including offline.
+        let db = self.db.clone();
+        let library_id = *library_id;
+        let offline = self.offline_mode;
+        // File checks can touch thousands of cached pages. Keep them off the UI thread.
+        let series = tokio::task::spawn_blocking(move || {
+            let mut series = db.get_series(&library_id).map_err(|err| err.to_string())?;
+            for item in &mut series {
+                item.is_cached = db.is_series_fully_cached(item.id);
+            }
+            if offline {
+                series.retain(|item| item.is_cached);
+            }
+            Ok::<_, String>(series)
+        })
+        .await??;
         Ok(series)
     }
 

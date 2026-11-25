@@ -1,4 +1,5 @@
 use rusqlite::{Connection, Result};
+use std::io::{BufRead, Cursor};
 use std::sync::{Arc, Mutex};
 
 // Removed unused import
@@ -8,10 +9,30 @@ use crate::kavita::{
 };
 
 pub(crate) fn valid_picture_file(path: &str) -> bool {
-    image::ImageReader::open(path)
+    let Ok(reader) = image::ImageReader::open(path) else {
+        return false;
+    };
+    let extension_format = reader.format();
+    let mut file = reader.into_inner();
+    let Ok(header) = file.fill_buf() else {
+        return false;
+    };
+    let Some(format) = image::guess_format(header).ok().or(extension_format) else {
+        return false;
+    };
+
+    // The JPEG decoder reads its entire input even when only asked for dimensions.
+    // Most headers fit in the file's buffer. Try that before reading the whole page.
+    if format == image::ImageFormat::Jpeg {
+        if let Ok((width, height)) =
+            image::ImageReader::with_format(Cursor::new(header), format).into_dimensions()
+        {
+            return width > 0 && height > 0;
+        }
+    }
+    image::ImageReader::with_format(file, format)
+        .into_dimensions()
         .ok()
-        .and_then(|reader| reader.with_guessed_format().ok())
-        .and_then(|reader| reader.into_dimensions().ok())
         .is_some_and(|(width, height)| width > 0 && height > 0)
 }
 
@@ -72,6 +93,10 @@ impl Database {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS manga_pictures (id INTEGER PRIMARY KEY AUTOINCREMENT, chapter_id INTEGER, page INTEGER, file TEXT)",
             [],
+        )?;
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS volumes_by_series ON volumes(series_id);
+             CREATE INDEX IF NOT EXISTS pictures_by_chapter_page ON manga_pictures(chapter_id, page);",
         )?;
 
         conn.execute(
@@ -755,6 +780,26 @@ mod tests {
             pages,
             is_cached: false,
         }
+    }
+
+    #[test]
+    fn cached_jpeg_can_have_more_metadata_than_the_read_buffer() {
+        let cache = TestCache::new();
+        let mut image = Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(2, 3)
+            .write_to(&mut image, image::ImageFormat::Jpeg)
+            .unwrap();
+        let jpeg = image.into_inner();
+        let metadata_size = 32_768u16;
+        let mut with_metadata = jpeg[..2].to_vec();
+        with_metadata.extend([0xff, 0xe3]); // APP3 marker
+        with_metadata.extend(metadata_size.to_be_bytes());
+        with_metadata.resize(4 + usize::from(metadata_size), 0);
+        with_metadata.extend_from_slice(&jpeg[2..]);
+        let path = cache.0.join("metadata.jpg");
+        std::fs::write(&path, with_metadata).unwrap();
+
+        assert!(valid_picture_file(path.to_str().unwrap()));
     }
 
     #[test]
