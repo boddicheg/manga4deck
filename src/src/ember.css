@@ -86,7 +86,7 @@
 .ember-action strong { font-size: 24px; font-weight: 600; line-height: 30px; }
 .ember-action span { font-size: 18px; line-height: 24px; color: var(--ember-muted); }
 .ember-note { min-height: 44px; display: flex; align-items: center; color: var(--ember-muted); }
-.ember-home-libraries { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.ember-library-folders { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .ember-library-heading { min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .ember-library-heading-copy { min-width: 0; display: flex; align-items: center; gap: 16px; }
 .ember-library-heading h2 { width: 190px; font-size: 24px; line-height: 30px; font-weight: 600; }

@@ -21,7 +21,6 @@ static KAVITA: OnceCell<SharedKavita> = OnceCell::new();
 static TOAST_MESSAGES: Lazy<tokio::sync::broadcast::Sender<String>> =
     Lazy::new(|| tokio::sync::broadcast::channel(32).0);
 const READER_BATCH_SIZE: i32 = 10;
-const SHELF_COLUMNS: usize = 7;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -322,45 +321,6 @@ fn exit_process() {
     std::process::exit(0);
 }
 
-fn visible_tile_count(
-    page: Page,
-    libraries: &[Library],
-    series: &[Series],
-    volumes: &[Volume],
-) -> usize {
-    match page {
-        Page::Dashboard => 1,
-        Page::Libraries => libraries.len() + 1,
-        Page::Series => series.len() + 1,
-        Page::Volumes => volumes.len() + 1,
-        Page::Reader => 0,
-        Page::Settings => 5,
-    }
-}
-
-fn tile_columns(page: Page, shelf_columns: usize) -> usize {
-    match page {
-        Page::Libraries | Page::Series | Page::Volumes => shelf_columns.max(1),
-        Page::Dashboard => 1,
-        Page::Reader => 1,
-        Page::Settings => 3,
-    }
-}
-
-fn move_selection(current: usize, key: &str, count: usize, columns: usize) -> usize {
-    if count == 0 {
-        return 0;
-    }
-
-    match key {
-        "ArrowLeft" => current.saturating_sub(1),
-        "ArrowRight" => (current + 1).min(count - 1),
-        "ArrowUp" => current.saturating_sub(columns),
-        "ArrowDown" => (current + columns).min(count - 1),
-        _ => current,
-    }
-}
-
 fn selected_series(series: &[Series], selected: usize) -> Option<&Series> {
     selected.checked_sub(1).and_then(|index| series.get(index))
 }
@@ -383,34 +343,11 @@ fn series_selection_after_refresh(
 fn replace_series(
     items: Vec<Series>,
     mut series: Signal<Vec<Series>>,
-    mut remembered: Signal<usize>,
     mut selected: Signal<usize>,
-    page: Signal<Page>,
 ) {
-    let current = if page() == Page::Series {
-        selected()
-    } else {
-        remembered()
-    };
-    let next = series_selection_after_refresh(&series.peek(), current, &items);
+    let next = series_selection_after_refresh(&series.peek(), selected(), &items);
     series.set(items);
-    remembered.set(next);
-    if page() == Page::Series {
-        selected.set(next);
-    }
-}
-
-fn current_series_library_id(
-    series: &[Series],
-    libraries: &[Library],
-    libraries_selection: usize,
-) -> Option<i32> {
-    series.first().map(|item| item.library_id).or_else(|| {
-        libraries_selection
-            .checked_sub(1)
-            .and_then(|index| libraries.get(index))
-            .map(|library| library.id)
-    })
+    selected.set(next);
 }
 
 fn first_non_complete_volume_selection(volumes: &[Volume]) -> usize {
@@ -623,7 +560,7 @@ html, body, #main {
 .app:focus {
   outline: none;
 }
-.app.series-mode {
+.app.reader-mode {
   padding: 0;
   background: #050505;
   overflow-x: hidden;
@@ -664,323 +601,6 @@ html, body, #main {
     opacity: 1;
     transform: translateX(-50%) translateY(0);
   }
-}
-.series-page {
-  width: 100%;
-  min-height: 100vh;
-  scroll-behavior: smooth;
-  background:
-    repeating-linear-gradient(45deg, rgba(0,0,0,0.05) 0px, rgba(0,0,0,0.05) 2px, transparent 2px, transparent 4px),
-    repeating-linear-gradient(-45deg, rgba(0,0,0,0.04) 0px, rgba(0,0,0,0.04) 2px, transparent 2px, transparent 4px),
-    linear-gradient(90deg, #8a552c 0%, #a66a3a 44%, #805026 100%);
-}
-.series-titlebar {
-  height: 34px;
-  display: grid;
-  grid-template-columns: 120px 1fr 120px;
-  align-items: center;
-  background: linear-gradient(#060606, #010101);
-  border-bottom: 1px solid #2a2a2a;
-}
-.series-titlebar h1 {
-  margin: 0;
-  text-align: center;
-  font-size: 18px;
-  line-height: 1;
-  font-weight: 900;
-  color: #f5f5f5;
-}
-.series-back {
-  width: 92px;
-  height: 36px;
-  margin-left: 16px;
-  border: 1px solid rgba(255,255,255,0.18);
-  border-radius: 4px;
-  background: rgba(0,0,0,0.36);
-  color: #fff;
-  font-size: 15px;
-  font-weight: 700;
-  cursor: pointer;
-}
-.series-back:focus,
-.series-back:hover,
-.series-back.selected {
-  outline: 2px solid #3b82f6;
-  outline-offset: 2px;
-}
-.series-section {
-  position: relative;
-  padding: 16px 16px 42px;
-}
-.series-section-title {
-  margin: 0 0 18px;
-  color: #fff;
-  font-size: 18px;
-  font-weight: 900;
-  text-shadow: 0 2px 4px rgba(0,0,0,0.45);
-}
-.series-count {
-  color: rgba(255,255,255,0.72);
-}
-.series-grid {
-  position: relative;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  column-gap: 26px;
-  row-gap: 68px;
-  align-items: start;
-}
-.series-card-wrap {
-  position: relative;
-  display: flex;
-  justify-content: center;
-}
-.series-card-wrap::after {
-  content: "";
-  position: absolute;
-  left: -18px;
-  right: -18px;
-  bottom: -34px;
-  height: 31px;
-  z-index: 0;
-  background: linear-gradient(to bottom, #8b4513 0%, #654321 58%, #4a3219 100%);
-  border-top: 1px solid rgba(255,255,255,0.12);
-  box-shadow: 0 5px 8px rgba(0,0,0,0.42), inset 0 1px 1px rgba(255,255,255,0.12);
-}
-.series-card-wrap::before {
-  content: "";
-  position: absolute;
-  left: -18px;
-  right: -18px;
-  bottom: -38px;
-  height: 6px;
-  z-index: 0;
-  background: linear-gradient(to bottom, rgba(0,0,0,0.35), transparent);
-}
-.series-card {
-  position: relative;
-  z-index: 1;
-  width: 150px;
-  height: 200px;
-  padding: 0;
-  border: 1px solid rgba(0,0,0,0.42);
-  border-radius: 4px;
-  overflow: hidden;
-  background-color: #202020;
-  background-size: cover;
-  background-position: center;
-  color: #fff;
-  cursor: pointer;
-  scroll-margin: 96px 0 72px;
-  box-shadow: 8px -8px 8px rgba(0,0,0,0.22), 3px -3px 4px rgba(0,0,0,0.16), inset 0 0 0 1px rgba(255,255,255,0.10);
-  transform: translateY(0) scale(1);
-  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
-}
-.series-card:focus,
-.series-card:hover {
-  outline: none;
-  border: 2px solid rgba(248,250,252,0.8);
-  box-shadow:
-    8px -8px 12px rgba(0,0,0,0.44),
-    3px -3px 6px rgba(0,0,0,0.34),
-    0 0 0 2px rgba(59,130,246,0.56);
-}
-.series-card.selected {
-  outline: none;
-  border: 2px solid #60a5fa;
-  transform: translateY(-6px) scale(1.04);
-  box-shadow:
-    10px -10px 18px rgba(0,0,0,0.54),
-    4px -4px 8px rgba(0,0,0,0.38),
-    0 0 0 3px rgba(96,165,250,0.95),
-    0 0 0 6px rgba(17,24,39,0.88),
-    0 0 24px rgba(56,189,248,0.64);
-}
-.series-progress {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 6px;
-  background: rgba(0,0,0,0.7);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.3);
-}
-.series-progress-fill {
-  height: 100%;
-  background: #3b82f6;
-  box-shadow: 0 0 4px rgba(255,255,255,0.45);
-}
-.series-progress-fill.complete {
-  background: #22c55e;
-}
-.series-progress-fill.cached {
-  background: #f59e0b;
-}
-.series-card-title {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  padding: 0 8px;
-  background: rgba(0,0,0,0.86);
-  border-top: 1px solid rgba(255,255,255,0.12);
-  font-size: 14px;
-  line-height: 1;
-  text-align: center;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.series-card-title.complete {
-  background: rgba(4, 120, 87, 0.88);
-}
-.series-card-title.cached {
-  background: rgba(180, 83, 9, 0.88);
-}
-.series-card-title span {
-  display: block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.series-card.selected .series-card-title {
-  justify-content: flex-start;
-}
-.series-card.selected .series-card-title span {
-  max-width: none;
-  min-width: 100%;
-  overflow: visible;
-  text-overflow: clip;
-  animation: title-marquee 7s linear infinite;
-}
-@keyframes title-marquee {
-  0%, 18% {
-    transform: translateX(0);
-  }
-  82%, 100% {
-    transform: translateX(calc(-100% + 134px));
-  }
-}
-.library-card {
-  position: relative;
-  z-index: 1;
-  width: 150px;
-  height: 200px;
-  padding: 0;
-  border: 1px solid rgba(0,0,0,0.42);
-  border-radius: 4px;
-  overflow: hidden;
-  background:
-    linear-gradient(135deg, rgba(255,255,255,0.10), transparent 36%),
-    repeating-linear-gradient(90deg, rgba(255,255,255,0.08) 0px, rgba(255,255,255,0.08) 2px, transparent 2px, transparent 9px),
-    linear-gradient(145deg, #34383f 0%, #20242b 52%, #111317 100%);
-  color: #fff;
-  cursor: pointer;
-  box-shadow: 8px -8px 8px rgba(0,0,0,0.22), 3px -3px 4px rgba(0,0,0,0.16), inset 0 0 0 1px rgba(255,255,255,0.10);
-}
-.library-card:focus,
-.library-card:hover,
-.library-card.selected {
-  outline: none;
-  border: 2px solid #111;
-  box-shadow: 8px -8px 12px rgba(0,0,0,0.44), 3px -3px 6px rgba(0,0,0,0.34), 0 0 0 2px rgba(59,130,246,0.65);
-}
-.library-card::before {
-  content: "";
-  position: absolute;
-  left: 14px;
-  top: 0;
-  bottom: 0;
-  width: 10px;
-  background: rgba(0,0,0,0.24);
-  border-left: 1px solid rgba(255,255,255,0.10);
-  border-right: 1px solid rgba(0,0,0,0.35);
-}
-.library-card::after {
-  content: "";
-  position: absolute;
-  left: 34px;
-  right: 34px;
-  top: 36px;
-  height: 78px;
-  border-radius: 4px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(0,0,0,0.20);
-  box-shadow: inset 0 1px 10px rgba(255,255,255,0.05);
-}
-.library-card-title {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  min-height: 44px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  padding: 6px 8px;
-  background: rgba(0,0,0,0.86);
-  border-top: 1px solid rgba(255,255,255,0.12);
-  font-size: 16px;
-  font-weight: 800;
-  line-height: 1.05;
-  text-align: center;
-}
-.back-card {
-  position: relative;
-  z-index: 1;
-  width: 150px;
-  height: 200px;
-  padding: 0;
-  border: 1px solid rgba(0,0,0,0.42);
-  border-radius: 4px;
-  overflow: hidden;
-  background:
-    radial-gradient(circle at 50% 36%, rgba(255,255,255,0.16), transparent 36%),
-    linear-gradient(145deg, #2e333b 0%, #20242b 56%, #111317 100%);
-  color: #fff;
-  cursor: pointer;
-  box-shadow: 8px -8px 8px rgba(0,0,0,0.22), 3px -3px 4px rgba(0,0,0,0.16), inset 0 0 0 1px rgba(255,255,255,0.10);
-}
-.back-card:focus,
-.back-card:hover,
-.back-card.selected {
-  outline: none;
-  border: 2px solid #111;
-  box-shadow: 8px -8px 12px rgba(0,0,0,0.44), 3px -3px 6px rgba(0,0,0,0.34), 0 0 0 2px rgba(255,75,75,0.85);
-}
-.back-card-arrow {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 42px;
-  text-align: center;
-  font-size: 56px;
-  line-height: 1;
-  font-weight: 900;
-}
-.back-card-title {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 38px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  padding: 0 8px;
-  background: rgba(0,0,0,0.86);
-  border-top: 1px solid rgba(255,255,255,0.12);
-  font-size: 15px;
-  font-weight: 800;
-  line-height: 1;
-  text-align: center;
 }
 .reader-page {
   width: 100vw;
@@ -1108,11 +728,9 @@ html, body, #main {
 fn app() -> Element {
     let mut status = use_signal(|| tokio::runtime::Handle::current().block_on(load_status()));
     let busy = use_signal(|| false);
-    let mut shelf_columns = use_signal(|| SHELF_COLUMNS);
     let mut page = use_signal(|| Page::Dashboard);
-    let mut selected_index = use_signal(|| 0usize);
-    let mut dashboard_selection = use_signal(|| 0usize);
-    let mut libraries_selection = use_signal(|| 0usize);
+    let mut selected_library = use_signal(|| None::<i32>);
+    let mut library_origin = use_signal(|| Page::Libraries);
     let mut series_selection = use_signal(|| 0usize);
     let mut series_filter = use_signal(SeriesFilter::default);
     let mut volumes_selection = use_signal(|| 0usize);
@@ -1160,12 +778,10 @@ fn app() -> Element {
     let mut home_loading = use_signal(|| true);
     let mut downloaded_series = use_signal(Vec::<Series>::new);
     let mut home_generation = use_signal(|| 0u64);
-    let mut home_libraries_loading = use_signal(|| true);
-    let mut home_libraries_error = use_signal(|| false);
-    let mut home_libraries_refresh = use_signal(|| 0u64);
-    let mut home_libraries_generation = use_signal(|| 0u64);
-    let mut home_library_focus = use_signal(|| None::<i32>);
-    let mut library_from_home = use_signal(|| false);
+    let mut libraries_loading = use_signal(|| true);
+    let mut libraries_error = use_signal(|| false);
+    let mut libraries_refresh = use_signal(|| 0u64);
+    let mut libraries_generation = use_signal(|| 0u64);
     let home_connection = use_memo(move || {
         let current = status.read();
         (
@@ -1177,17 +793,17 @@ fn app() -> Element {
     use_effect(move || {
         let current = page();
         let _connection = home_connection();
-        let _refresh = home_libraries_refresh();
-        let generation = (*home_libraries_generation.peek()).wrapping_add(1);
-        home_libraries_generation.set(generation);
-        if current != Page::Dashboard {
+        let _refresh = libraries_refresh();
+        let generation = (*libraries_generation.peek()).wrapping_add(1);
+        libraries_generation.set(generation);
+        if !matches!(current, Page::Dashboard | Page::Libraries) {
             return;
         }
-        home_libraries_loading.set(true);
-        home_libraries_error.set(false);
+        libraries_loading.set(true);
+        libraries_error.set(false);
         spawn(async move {
             let state = snapshot().await;
-            if *home_libraries_generation.peek() != generation {
+            if *libraries_generation.peek() != generation {
                 return;
             }
             // Saved folders remain usable while refreshing or disconnected.
@@ -1195,14 +811,14 @@ fn app() -> Element {
                 libraries.set(saved);
             }
             let result = tokio::time::timeout(Duration::from_secs(10), load_libraries()).await;
-            if *home_libraries_generation.peek() != generation {
+            if *libraries_generation.peek() != generation {
                 return;
             }
             match result {
                 Ok(Ok(items)) => libraries.set(items),
-                _ => home_libraries_error.set(true),
+                _ => libraries_error.set(true),
             }
-            home_libraries_loading.set(false);
+            libraries_loading.set(false);
         });
     });
     use_effect(move || {
@@ -1210,10 +826,7 @@ fn app() -> Element {
         let _offline = status.read().offline_mode;
         let generation = (*home_generation.peek()).wrapping_add(1);
         home_generation.set(generation);
-        if matches!(
-            current,
-            Page::Dashboard | Page::Settings | Page::Series | Page::Volumes
-        ) {
+        if current != Page::Reader {
             if current == Page::Dashboard {
                 home_loading.set(true);
             }
@@ -1245,26 +858,8 @@ fn app() -> Element {
     });
 
     use_effect(move || {
-        let _ = selected_index();
         if page() == Page::Reader {
             document::eval("document.querySelector('.app')?.focus({ preventScroll: true });");
-        }
-        if page() == Page::Libraries {
-            document::eval(
-                r#"
-                setTimeout(() => {
-                    const selected = document.querySelector(".series-page .selected");
-                    if (selected) {
-                        selected.focus({ preventScroll: true });
-                        selected.scrollIntoView({
-                            block: "nearest",
-                            inline: "nearest",
-                            behavior: "smooth"
-                        });
-                    }
-                }, 0);
-                "#,
-            );
         }
     });
 
@@ -1457,36 +1052,22 @@ fn app() -> Element {
     let status_snapshot = status.read().clone();
     let toast_snapshot = toast.read().clone();
     let page_snapshot = page();
-    let libraries_snapshot = libraries.read().clone();
     let series_snapshot = series.read().clone();
     let volumes_snapshot = volumes.read().clone();
-    let selected_snapshot = selected_index();
-    let selectable_count = visible_tile_count(
-        page_snapshot,
-        &libraries_snapshot,
-        &series_snapshot,
-        &volumes_snapshot,
-    );
-    let selected_snapshot = selected_snapshot.min(selectable_count.saturating_sub(1));
-    let app_class = if matches!(
-        page_snapshot,
-        Page::Dashboard | Page::Settings | Page::Series | Page::Volumes
-    ) {
-        "app ember-mode"
+    let app_class = if page_snapshot == Page::Reader {
+        "app reader-mode"
     } else {
-        "app series-mode"
+        "app ember-mode"
     };
 
     let mut on_series_focus = move |id: i32| {
         let items = series.peek();
         if let Some(index) = items.iter().position(|s| s.id == id) {
-            selected_index.set(index + 1);
             series_selection.set(index + 1);
         }
     };
     let on_volume_focus = move |id: i32| {
         if let Some(index) = volumes.peek().iter().position(|v| v.id == id) {
-            selected_index.set(index + 1);
             volumes_selection.set(index + 1);
         }
     };
@@ -1494,44 +1075,16 @@ fn app() -> Element {
     let on_ember_action = move |action: EmberAction| {
         run_ui_action(busy, async move {
             match action {
-                EmberAction::Home => {
-                    selected_index.set(0);
-                    page.set(Page::Dashboard);
-                }
-                EmberAction::Settings => {
-                    selected_index.set(3);
-                    page.set(Page::Settings);
-                }
-                EmberAction::Library => match load_libraries().await {
-                    Ok(items) => {
-                        library_from_home.set(false);
-                        libraries.set(items);
-                        selected_index.set(0);
-                        page.set(Page::Libraries);
-                    }
-                    Err(err) => show_toast(
-                        &mut status,
-                        &mut toast,
-                        &mut toast_generation,
-                        format!("Failed to load libraries: {err}"),
-                    ),
-                },
+                EmberAction::Home => page.set(Page::Dashboard),
+                EmberAction::Settings => page.set(Page::Settings),
+                EmberAction::Library => page.set(Page::Libraries),
                 EmberAction::OpenLibrary(library) => match load_series(library.id).await {
                     Ok(items) => {
-                        libraries_selection.set(
-                            libraries
-                                .peek()
-                                .iter()
-                                .position(|item| item.id == library.id)
-                                .map(|i| i + 1)
-                                .unwrap_or(0),
-                        );
-                        home_library_focus.set(Some(library.id));
-                        library_from_home.set(true);
+                        selected_library.set(Some(library.id));
+                        library_origin.set(page());
                         series.set(items);
                         series_selection.set(0);
                         series_filter.set(SeriesFilter::Unread);
-                        selected_index.set(0);
                         page.set(Page::Series);
                     }
                     Err(err) => show_toast(
@@ -1548,7 +1101,6 @@ fn app() -> Element {
                             let next = first_non_complete_volume_selection(&items);
                             volumes.set(items);
                             volumes_selection.set(next);
-                            selected_index.set(next);
                             page.set(Page::Volumes);
                         }
                         Err(err) => show_toast(
@@ -1575,7 +1127,6 @@ fn app() -> Element {
                         return;
                     }
                     if let Some(index) = volumes.peek().iter().position(|v| v.id == volume.id) {
-                        selected_index.set(index + 1);
                         volumes_selection.set(index + 1);
                     }
                     let start = initial_reader_page(&volume);
@@ -1587,20 +1138,9 @@ fn app() -> Element {
                     page.set(Page::Reader);
                 }
                 EmberAction::BackFromSeries => {
-                    let library_id = current_series_library_id(
-                        &series.read(),
-                        &libraries.read(),
-                        libraries_selection(),
-                    );
-                    if let Some(id) = library_id {
+                    if let Some(id) = selected_library() {
                         match load_series(id).await {
-                            Ok(items) => replace_series(
-                                items,
-                                series,
-                                series_selection,
-                                selected_index,
-                                page,
-                            ),
+                            Ok(items) => replace_series(items, series, series_selection),
                             Err(err) => show_toast(
                                 &mut status,
                                 &mut toast,
@@ -1609,23 +1149,11 @@ fn app() -> Element {
                             ),
                         }
                     }
-                    selected_index.set(series_selection());
                     page.set(Page::Series);
                 }
-                EmberAction::BackFromLibrary => {
-                    selected_index.set(if library_from_home() {
-                        0
-                    } else {
-                        libraries_selection()
-                    });
-                    page.set(if library_from_home() {
-                        Page::Dashboard
-                    } else {
-                        Page::Libraries
-                    });
-                }
+                EmberAction::BackFromLibrary => page.set(library_origin()),
                 EmberAction::RefreshLibraries => {
-                    home_libraries_refresh.set(home_libraries_refresh().wrapping_add(1));
+                    libraries_refresh.set(libraries_refresh().wrapping_add(1));
                 }
                 EmberAction::Resume(read) => {
                     let state = snapshot().await;
@@ -1636,14 +1164,9 @@ fn app() -> Element {
                     );
                     match context {
                         (Ok(libs), Ok(items), Ok(siblings)) => {
-                            library_from_home.set(true);
+                            library_origin.set(Page::Dashboard);
                             series_filter.set(SeriesFilter::Unread);
-                            libraries_selection.set(
-                                libs.iter()
-                                    .position(|l| l.id == read.library_id)
-                                    .map(|i| i + 1)
-                                    .unwrap_or(0),
-                            );
+                            selected_library.set(Some(read.library_id));
                             series_selection.set(
                                 items
                                     .iter()
@@ -1678,18 +1201,13 @@ fn app() -> Element {
                     }
                 }
                 EmberAction::OpenDownload(item) => {
-                    library_from_home.set(false);
-                    series_filter.set(SeriesFilter::Downloaded);
                     let state = snapshot().await;
                     match state.get_cached_volumes(&item.id) {
                         Ok(items) if !items.is_empty() => {
+                            library_origin.set(Page::Libraries);
+                            series_filter.set(SeriesFilter::Downloaded);
+                            selected_library.set(Some(item.library_id));
                             if let Ok(libs) = state.db.get_libraries() {
-                                libraries_selection.set(
-                                    libs.iter()
-                                        .position(|l| l.id == item.library_id)
-                                        .map(|i| i + 1)
-                                        .unwrap_or(0),
-                                );
                                 libraries.set(libs);
                             }
                             if let Ok(items) = state.db.get_series(&item.library_id) {
@@ -1704,7 +1222,6 @@ fn app() -> Element {
                             }
                             let next = first_non_complete_volume_selection(&items);
                             volumes.set(items);
-                            selected_index.set(next);
                             volumes_selection.set(next);
                             page.set(Page::Volumes);
                         }
@@ -1796,274 +1313,114 @@ fn app() -> Element {
             class: "{app_class}",
             "aria-busy": "{busy}",
             tabindex: "0",
-            onmounted: move |event| {
-                let element = event.data();
-                spawn(async move {
-                    if !matches!(page(), Page::Dashboard | Page::Settings | Page::Series | Page::Volumes) {
-                        let _ = element.set_focus(true).await;
-                    }
-                    let mut layout = document::eval(include_str!("layout.js"));
-                    while let Ok(columns) = layout.recv::<usize>().await {
-                        shelf_columns.set(columns.max(1));
-                    }
-                });
-            },
             onkeydown: move |event| {
-                if matches!(page(), Page::Dashboard | Page::Settings | Page::Series | Page::Volumes)
-                    && !((page() == Page::Series && event.key().to_string() == "F2")
-                        || (page() == Page::Volumes && matches!(event.key().to_string().as_str(), "F1" | "F2"))) { return; }
-                if busy() {
-                    event.prevent_default();
-                    return;
-                }
+                let current = page();
                 let key = event.key().to_string();
-                if page() == Page::Reader && matches!(key.as_str(), "Enter" | " ") {
-                    return;
-                }
-                if matches!(key.as_str(), "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" | "Enter" | " " | "F1" | "F2" | "Backspace") {
-                    event.prevent_default();
-                }
+                let reader_arrow = current == Page::Reader
+                    && matches!(key.as_str(), "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown");
+                let command = match current {
+                    Page::Series => key == "F2",
+                    Page::Volumes => matches!(key.as_str(), "F1" | "F2"),
+                    Page::Reader => matches!(key.as_str(), "F2" | "Backspace"),
+                    Page::Dashboard | Page::Libraries | Page::Settings => false,
+                };
+                if !reader_arrow && !command { return; }
+                event.prevent_default();
+                if busy() { return; }
 
-                if matches!(key.as_str(), "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown") {
-
-                    if page() == Page::Reader {
-                        if let Some(volume) = { reader_volume.read().clone() } {
-                            match key.as_str() {
-                                "ArrowDown" => {
-                                    document::eval(
-                                        r#"
-                                        const reader = document.querySelector(".reader-page");
-                                        if (reader) {
-                                            reader.scrollBy({ top: Math.floor(reader.clientHeight * 0.41), behavior: "smooth" });
-                                        }
-                                        "#,
-                                    );
-                                }
-                                "ArrowUp" => {
-                                    document::eval(
-                                        r#"
-                                        const reader = document.querySelector(".reader-page");
-                                        if (reader) {
-                                            reader.scrollBy({ top: -Math.floor(reader.clientHeight * 0.41), behavior: "smooth" });
-                                        }
-                                        "#,
-                                    );
-                                }
-                                "ArrowLeft" | "ArrowRight" => {
-                                    reader_slider_generation.set(reader_slider_generation().wrapping_add(1));
-                                    if !reader_slider_visible() {
-                                        reader_slider_visible.set(true);
-                                    } else {
-                                        let max_page = volume.pages.saturating_sub(1).max(0);
-                                        let current = reader_page();
-                                        let next = if key == "ArrowRight" {
-                                            (current + 1).min(max_page)
-                                        } else {
-                                            current.saturating_sub(1).max(0)
-                                        };
-                                        seek_reader(next, volume.pages, reader_page, reader_first_page, reader_loaded_until, reader_slider_visible, reader_slider_generation);
+                if reader_arrow {
+                    if let Some(volume) = { reader_volume.read().clone() } {
+                        match key.as_str() {
+                            "ArrowDown" => {
+                                document::eval(
+                                    r#"
+                                    const reader = document.querySelector(".reader-page");
+                                    if (reader) {
+                                        reader.scrollBy({ top: Math.floor(reader.clientHeight * 0.41), behavior: "smooth" });
                                     }
-                                }
-                                _ => {}
+                                    "#,
+                                );
                             }
-                        }
-                    } else {
-                        let count = visible_tile_count(page(), &libraries.read(), &series.read(), &volumes.read());
-                        let current = selected_index().min(count.saturating_sub(1));
-                        let next = move_selection(current, key.as_str(), count, tile_columns(page(), shelf_columns()));
-                        selected_index.set(next);
-                        match page() {
-                            Page::Dashboard => dashboard_selection.set(next),
-                            Page::Libraries => libraries_selection.set(next),
-                            Page::Series => series_selection.set(next),
-                            Page::Volumes => volumes_selection.set(next),
-                            Page::Reader | Page::Settings => {}
+                            "ArrowUp" => {
+                                document::eval(
+                                    r#"
+                                    const reader = document.querySelector(".reader-page");
+                                    if (reader) {
+                                        reader.scrollBy({ top: -Math.floor(reader.clientHeight * 0.41), behavior: "smooth" });
+                                    }
+                                    "#,
+                                );
+                            }
+                            "ArrowLeft" | "ArrowRight" => {
+                                reader_slider_generation.set(reader_slider_generation().wrapping_add(1));
+                                if !reader_slider_visible() {
+                                    reader_slider_visible.set(true);
+                                } else {
+                                    let max_page = volume.pages.saturating_sub(1).max(0);
+                                    let current = reader_page();
+                                    let next = if key == "ArrowRight" {
+                                        (current + 1).min(max_page)
+                                    } else {
+                                        current.saturating_sub(1).max(0)
+                                    };
+                                    seek_reader(next, volume.pages, reader_page, reader_first_page, reader_loaded_until, reader_slider_visible, reader_slider_generation);
+                                }
+                            }
+                            _ => {}
                         }
                     }
-
                     return;
                 }
-                if !matches!(key.as_str(), "Enter" | " " | "F1" | "F2" | "Backspace") { return; }
                 run_ui_action(busy, async move {
-
                     match key.as_str() {
-
-                        "Enter" | " " => {
-
-                            let selected = selected_index().min(visible_tile_count(page(), &libraries.read(), &series.read(), &volumes.read()).saturating_sub(1));
-                            match page() {
-                                Page::Dashboard => {},
-                                Page::Libraries => {
-                                    if selected == 0 {
-                                        selected_index.set(dashboard_selection());
-                                        page.set(Page::Dashboard);
-                                    } else if let Some(library) = { libraries.read().get(selected - 1).cloned() } {
-                                        let id = library.id;
-                                        match load_series(id).await {
-                                            Ok(items) => {
-                                                series.set(items);
-                                                series_selection.set(0);
-                                                series_filter.set(SeriesFilter::Unread);
-                                                show_toast(
-                                                    &mut status,
-                                                    &mut toast,
-                                                    &mut toast_generation,
-                                                    format!("Loaded series for library id {id}"),
-                                                );
-                                                libraries_selection.set(selected);
-                                                selected_index.set(0);
-                                                page.set(Page::Series);
-                                            }
-                                            Err(err) => show_toast(
-                                                &mut status,
-                                                &mut toast,
-                                                &mut toast_generation,
-                                                format!("Failed to load series: {err}"),
-                                            ),
-                                        }
-                                    }
-                                }
-                                Page::Series => {
-                                    if selected == 0 {
-                                        selected_index.set(if library_from_home() { 0 } else { libraries_selection() });
-                                        page.set(if library_from_home() { Page::Dashboard } else { Page::Libraries });
-                                    } else if let Some(item) = { selected_series(&series.read(), selected).cloned() } {
-                                        let id = item.id;
-                                        match load_volumes(id).await {
-                                            Ok(items) => {
-                                                let volume_selection = first_non_complete_volume_selection(&items);
-                                                volumes.set(items);
-                                                show_toast(
-                                                    &mut status,
-                                                    &mut toast,
-                                                    &mut toast_generation,
-                                                    format!("Loaded volumes for series id {id}"),
-                                                );
-                                                series_selection.set(selected);
-                                                selected_index.set(volume_selection);
-                                                volumes_selection.set(volume_selection);
-                                                page.set(Page::Volumes);
-                                            }
-                                            Err(err) => show_toast(
-                                                &mut status,
-                                                &mut toast,
-                                                &mut toast_generation,
-                                                format!("Failed to load volumes: {err}"),
-                                            ),
-                                        }
-                                    }
-                                }
-                                Page::Volumes => {
-                                    if selected == 0 {
-                                        let library_id = current_series_library_id(
-                                            &series.read(),
-                                            &libraries.read(),
-                                            libraries_selection(),
-                                        );
-                                        if let Some(library_id) = library_id {
-                                            match load_series(library_id).await {
-                                                Ok(items) => replace_series(items, series, series_selection, selected_index, page),
-                                                Err(err) => show_toast(&mut status, &mut toast, &mut toast_generation, format!("Failed to refresh series: {err}")),
-                                            }
-                                        }
-                                        selected_index.set(series_selection());
-                                        page.set(Page::Series);
-                                    } else if let Some(volume) = { volumes.read().get(selected - 1).cloned() } {
-                                        volumes_selection.set(selected);
-                                        let start_page = initial_reader_page(&volume);
-                                        reader_page.set(start_page);
-                                        reader_first_page.set(start_page);
-                                        reader_loaded_until.set(reader_batch_end(start_page, volume.pages));
-                                        reader_slider_visible.set(false);
-                                        reader_volume.set(Some(volume.clone()));
-                                        page.set(Page::Reader);
-                                    }
-                                }
-                                Page::Reader => {}
-                                Page::Settings => {},
-                            }
-                        }
                         "F1" => {
-
-                            if page() == Page::Volumes {
-                                let selected = selected_index().min(visible_tile_count(page(), &libraries.read(), &series.read(), &volumes.read()).saturating_sub(1));
-                                if selected > 0 {
-                                    let focused_volume = { volumes.read().get(selected - 1).cloned() };
-                                    if let Some(volume) = focused_volume {
-                                        match toggle_volume_read(&volume).await {
-                                            Ok(marked_read) => {
-                                                match load_volumes(volume.series_id).await {
-                                                    Ok(items) => {
-                                                        volumes.set(items);
-                                                        selected_index.set(selected);
-                                                        volumes_selection.set(selected);
-                                                    }
-                                                    Err(err) => show_toast(
-                                                        &mut status,
-                                                        &mut toast,
-                                                        &mut toast_generation,
-                                                        format!("Failed to refresh volumes: {err}"),
-                                                    ),
-                                                }
-                                                let message = if marked_read {
-                                                    format!("Marked {} as read", volume.title)
-                                                } else {
-                                                    format!("Marked {} as unread", volume.title)
-                                                };
-                                                show_toast(
-                                                    &mut status,
-                                                    &mut toast,
-                                                    &mut toast_generation,
-                                                    message,
-                                                );
-                                            }
+                            let focused_volume = volumes_selection()
+                                .checked_sub(1)
+                                .and_then(|index| volumes.peek().get(index).cloned());
+                            if let Some(volume) = focused_volume {
+                                match toggle_volume_read(&volume).await {
+                                    Ok(marked_read) => {
+                                        match load_volumes(volume.series_id).await {
+                                            Ok(items) => volumes.set(items),
                                             Err(err) => show_toast(
                                                 &mut status,
                                                 &mut toast,
                                                 &mut toast_generation,
-                                                format!("Failed to update volume: {err}"),
+                                                format!("Failed to refresh volumes: {err}"),
                                             ),
                                         }
+                                        let message = if marked_read {
+                                            format!("Marked {} as read", volume.title)
+                                        } else {
+                                            format!("Marked {} as unread", volume.title)
+                                        };
+                                        show_toast(&mut status, &mut toast, &mut toast_generation, message);
                                     }
+                                    Err(err) => show_toast(
+                                        &mut status,
+                                        &mut toast,
+                                        &mut toast_generation,
+                                        format!("Failed to update volume: {err}"),
+                                    ),
                                 }
                             }
                         }
                         "F2" => {
-
-                            let current_series = match page() {
-                                Page::Series => {
-                                    let series_snapshot = series.read();
-                                    selected_series(&series_snapshot, selected_index())
-                                        .map(|item| (item.id, item.title.clone(), Some(item.library_id)))
-                                }
+                            let current_series = match current {
+                                Page::Series => selected_series(&series.read(), series_selection())
+                                    .map(|item| (item.id, item.title.clone(), Some(item.library_id))),
                                 Page::Volumes => {
-                                    let volumes_snapshot = volumes.read();
-                                    let selected = selected_index().min(visible_tile_count(page(), &libraries.read(), &series.read(), &volumes.read()).saturating_sub(1));
-                                    let volume = if selected > 0 {
-                                        volumes_snapshot.get(selected - 1)
-                                    } else {
-                                        volumes_snapshot.first()
-                                    };
-                                    let library_id = current_series_library_id(
-                                        &series.read(),
-                                        &libraries.read(),
-                                        libraries_selection(),
-                                    );
-                                    volume.map(|item| {
-                                        (item.series_id, "this series".to_string(), library_id)
-                                    })
+                                    let items = volumes.read();
+                                    volumes_selection()
+                                        .checked_sub(1)
+                                        .and_then(|index| items.get(index))
+                                        .or_else(|| items.first())
+                                        .map(|item| (item.series_id, "this series".to_string(), selected_library()))
                                 }
                                 Page::Reader => reader_volume
                                     .read()
                                     .as_ref()
-                                    .map(|item| {
-                                        let library_id = current_series_library_id(
-                                            &series.read(),
-                                            &libraries.read(),
-                                            libraries_selection(),
-                                        );
-                                        (item.series_id, "this series".to_string(), library_id)
-                                    }),
+                                    .map(|item| (item.series_id, "this series".to_string(), selected_library())),
                                 Page::Dashboard | Page::Libraries | Page::Settings => None,
                             };
 
@@ -2095,7 +1452,7 @@ fn app() -> Element {
                                                 }
                                             } else if let Some(library_id) = library_id {
                                                 match load_series(library_id).await {
-                                                    Ok(items) => replace_series(items, series, series_selection, selected_index, page),
+                                                    Ok(items) => replace_series(items, series, series_selection),
                                                     Err(err) => show_toast(
                                                         &mut status,
                                                         &mut toast,
@@ -2158,44 +1515,18 @@ fn app() -> Element {
                             }
                         }
                         "Backspace" => {
-
-                            match page() {
-                                Page::Dashboard => {}
-                                Page::Libraries | Page::Settings => {
-                                    selected_index.set(dashboard_selection());
-                                    page.set(Page::Dashboard);
-                                }
-                                Page::Series => {
-                                    selected_index.set(if library_from_home() { 0 } else { libraries_selection() });
-                                    page.set(if library_from_home() { Page::Dashboard } else { Page::Libraries });
-                                }
-                                Page::Volumes => {
-                                    let library_id = current_series_library_id(
-                                        &series.read(),
-                                        &libraries.read(),
-                                        libraries_selection(),
-                                    );
-                                    if let Some(library_id) = library_id {
-                                        match load_series(library_id).await {
-                                            Ok(items) => replace_series(items, series, series_selection, selected_index, page),
-                                            Err(err) => show_toast(&mut status, &mut toast, &mut toast_generation, format!("Failed to refresh series: {err}")),
-                                        }
-                                    }
-                                    selected_index.set(series_selection());
-                                    page.set(Page::Series);
-                                }
-                                Page::Reader => {
-                                    if let Some(volume) = { reader_volume.read().clone() } {
-                                        let series_id = volume.series_id;
-                                        match load_volumes(series_id).await {
-                                            Ok(items) => volumes.set(items),
-                                            Err(err) => show_toast(&mut status, &mut toast, &mut toast_generation, format!("Failed to refresh volumes: {err}")),
-                                        }
-                                    }
-                                    selected_index.set(volumes_selection());
-                                    page.set(Page::Volumes);
+                            if let Some(volume) = { reader_volume.read().clone() } {
+                                match load_volumes(volume.series_id).await {
+                                    Ok(items) => volumes.set(items),
+                                    Err(err) => show_toast(
+                                        &mut status,
+                                        &mut toast,
+                                        &mut toast_generation,
+                                        format!("Failed to refresh volumes: {err}"),
+                                    ),
                                 }
                             }
+                            page.set(Page::Volumes);
                         }
                         _ => {}
                     }
@@ -2211,13 +1542,13 @@ fn app() -> Element {
             div { class: "tiles",
                 {
                     match page_snapshot {
-                        Page::Dashboard | Page::Settings | Page::Series | Page::Volumes => rsx! {
+                        Page::Dashboard | Page::Libraries | Page::Settings | Page::Series | Page::Volumes => rsx! {
                             EmberScreen {
                                 page: page_snapshot, status: status_snapshot.clone(), busy: busy(),
                                 reading: home_read.read().clone(), reading_loading: home_loading(),
                                 downloads: downloaded_series.read().clone(), onaction: on_ember_action,
-                                library_folders: libraries.read().clone(), libraries_loading: home_libraries_loading(),
-                                libraries_error: home_libraries_error(), focused_library: home_library_focus(),
+                                library_folders: libraries.read().clone(), libraries_loading: libraries_loading(),
+                                libraries_error: libraries_error(), focused_library: selected_library(),
                                 series_items: series_snapshot.clone(),
                                 focused_series: selected_series(&series_snapshot, series_selection()).map(|s| s.id),
                                 series_filter: series_filter(),
@@ -2228,68 +1559,6 @@ fn app() -> Element {
                                 downloading_volume: current_download().map(|(_, id)| id),
                                 focused_volume: volumes_selection().checked_sub(1).and_then(|i| volumes_snapshot.get(i)).map(|v| v.id),
                                 onvolumefocus: on_volume_focus,
-                            }
-                        },
-                        Page::Libraries => rsx! {
-                            div { class: "series-page",
-                                div { class: "series-titlebar",
-                                    div {}
-                                    h1 { "Libraries" }
-                                    div {}
-                                }
-                                div { class: "series-section",
-                                    h2 { class: "series-section-title",
-                                        "Libraries "
-                                        span { class: "series-count", "({libraries_snapshot.len()})" }
-                                    }
-                                    div { class: "series-grid",
-                                        div { class: "series-card-wrap",
-                                            button {
-                                                onfocus: move |_| selected_index.set(0),
-                                                "aria-disabled": "{busy}",
-                                                class: if selected_snapshot == 0 { "back-card selected" } else { "back-card" },
-                                                onclick: move |_| {
-                                                    selected_index.set(dashboard_selection());
-                                                    page.set(Page::Dashboard);
-                                                },
-                                                div { class: "back-card-arrow", "←" }
-                                                div { class: "back-card-title", "Dashboard" }
-                                            }
-                                        }
-                                        {libraries_snapshot.iter().enumerate().map(|(index, library)| {
-                                            let id = library.id;
-                                            let title = library.title.clone();
-                                            let class = if selected_snapshot == index + 1 { "library-card selected" } else { "library-card" };
-                                            rsx! {
-                                                div { class: "series-card-wrap",
-                                                    button {
-                                                        onfocus: move |_| selected_index.set(index + 1),
-                                                        "aria-disabled": "{busy}",
-                                                        class: "{class}",
-                                                        onclick: move |_| {
-                                                            run_ui_action(busy, async move {
-                                                                match load_series(id).await {
-                                                                    Ok(items) => {
-                                                                        series.set(items);
-                                                                        series_selection.set(0);
-                                                                        series_filter.set(SeriesFilter::Unread);
-                                                                        show_toast(&mut status, &mut toast, &mut toast_generation, format!("Loaded series for library id {id}"));
-                                                                        libraries_selection.set(index + 1);
-                                                                        selected_index.set(0);
-                                                                        page.set(Page::Series);
-                                                                    }
-                                                                    Err(err) => show_toast(&mut status, &mut toast, &mut toast_generation, format!("Failed to load series: {err}")),
-                                                                }
-
-                                                            });
-                                                        },
-                                                        div { class: "library-card-title", "{title}" }
-                                                    }
-                                                }
-                                            }
-                                        })}
-                                    }
-                                }
                             }
                         },
                         Page::Reader => rsx! {
@@ -2328,7 +1597,6 @@ fn app() -> Element {
                                                                 Ok(items) => volumes.set(items),
                                                                 Err(err) => show_toast(&mut status, &mut toast, &mut toast_generation, format!("Failed to refresh volumes: {err}")),
                                                             }
-                                                            selected_index.set(volumes_selection());
                                                             page.set(Page::Volumes);
 
                                                         });
@@ -2422,7 +1690,6 @@ fn app() -> Element {
                                                                     Err(err) => show_toast(&mut status, &mut toast, &mut toast_generation, format!("Failed to refresh volumes: {err}")),
                                                                 }
                                                             }
-                                                            selected_index.set(volumes_selection());
                                                             page.set(Page::Volumes);
 
                                                         });

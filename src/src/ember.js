@@ -29,7 +29,7 @@ if (root) await new Promise(resolve => {
             carousel.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
         } else el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
     };
-    const preferred = () => scope().querySelector('.ember-volume-row[data-autofocus="true"]') || scope().querySelector('.ember-series-card[data-autofocus="true"]') || scope().querySelector('.ember-folder[data-autofocus="true"]') || scope().querySelector('[data-autofocus="true"]') || controls()[0];
+    const preferred = () => scope().querySelector('.ember-volume-row[data-autofocus="true"]') || scope().querySelector('.ember-series-card[data-autofocus="true"]') || scope().querySelector('.ember-folder[data-autofocus="true"]') || scope().querySelector('[data-autofocus="true"]') || scope().querySelector('[aria-current="page"]') || controls()[0];
     const onFocus = () => {
         const folder = document.activeElement?.closest('.ember-folder');
         if (folder) lastFolder = folder;
@@ -94,6 +94,7 @@ if (root) await new Promise(resolve => {
         if (!controls().includes(current)) { updateFocus(); return; }
         const folder = current.closest('.ember-folder');
         const home = root.dataset.emberView === 'Home';
+        const folders = root.dataset.emberView === 'Your libraries';
         const library = root.dataset.emberView === 'Your library';
         const seriesCard = current.closest('.ember-series-card');
         const filter = current.closest('.ember-series-filter');
@@ -143,15 +144,19 @@ if (root) await new Promise(resolve => {
         }
         const reading = root.querySelector('.ember-resume button, .ember-empty button');
         const chosenFolder = lastFolder?.isConnected ? lastFolder : root.querySelector('.ember-folder[data-autofocus="true"]');
+        const retry = root.querySelector('.ember-library-error button');
+        const libraryTab = root.querySelector('[data-nav="1"]');
         if (folder) {
             if (key === 'ArrowLeft' || key === 'ArrowRight') {
                 const list = [...folder.parentElement.querySelectorAll('.ember-folder')];
                 focus(list[list.indexOf(folder) + (key === 'ArrowLeft' ? -1 : 1)]);
                 return;
             }
-            if (key === 'ArrowUp') { focus(reading || root.querySelector('[data-nav="0"]')); return; }
-            if (key === 'ArrowDown') { focus(root.querySelector('.ember-library-error button')); return; }
+            if (key === 'ArrowUp') { focus(folders ? libraryTab : reading || root.querySelector('[data-nav="0"]')); return; }
+            if (key === 'ArrowDown') { focus(retry); return; }
         }
+        if (folders && current === retry && key === 'ArrowUp') { focus(chosenFolder || libraryTab); return; }
+        if (folders && current.closest('.ember-nav') && key === 'ArrowDown') { focus(chosenFolder || retry); return; }
         if (home && current === reading && key === 'ArrowDown' && chosenFolder) { focus(chosenFolder); return; }
         if (home && current === reading && key === 'ArrowUp') { focus(root.querySelector('[data-nav="0"]')); return; }
         if (home && current.closest('.ember-nav') && key === 'ArrowDown') { focus(reading || chosenFolder); return; }
@@ -226,7 +231,7 @@ if (root) await new Promise(resolve => {
                 if (libraryCard) focus(root.querySelector('.ember-series-filter[aria-pressed="true"]'));
                 else root.querySelector('.ember-series-back')?.click();
             }
-            else if (document.activeElement?.closest('.ember-folder')) focus(root.querySelector('.ember-resume button, .ember-empty button') || root.querySelector('[data-nav="0"]'));
+            else if (root.dataset.emberView === 'Home' && document.activeElement?.closest('.ember-folder')) focus(root.querySelector('.ember-resume button, .ember-empty button') || root.querySelector('[data-nav="0"]'));
             else if (root.dataset.emberView === 'Home') focus(root.querySelector('[data-nav="0"]'));
             else root.querySelector('[data-nav="0"]')?.click();
         } else if (!dialog && (key.toLowerCase() === 'x' || key === 'F2')) {
