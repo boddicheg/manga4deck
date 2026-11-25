@@ -750,7 +750,9 @@ fn LibrarySeries(
         .filter(|s| series_filter.includes(s))
         .collect();
     let count = visible.len();
-    let preferred = focused_series.filter(|id| visible.iter().any(|s| s.id == *id));
+    let preferred = focused_series
+        .filter(|id| visible.iter().any(|s| s.id == *id))
+        .or_else(|| visible.first().map(|s| s.id));
     rsx! {
         section { class: "ember-series-library", "aria-label": "Series in this library",
             div { class: "ember-series-filters", role: "group", "aria-label": "Filter series",
