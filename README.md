@@ -52,6 +52,8 @@ Volume rows show an animated download indicator beside reading progress. It chan
 
 Home shows your most recent volume and a horizontal row of your Kavita libraries. **Browse library** takes you to the folders on Home. Use Left/Right or the scroll arrows to browse folders, then A/Enter to open one. Back from the series gallery returns to the selected folder on Home. Settings contains connection status, cache cleanup, server updates, connection details, online/offline mode, and Exit.
 
+Use **Settings → Refresh series covers** while online to download fresh cover thumbnails for every series. Each cached cover is replaced once its new image is ready.
+
 ## Offline reading
 
 Download a series before disconnecting, then use **Settings → Online** to switch to offline mode. Downloads skip completed chapters. Offline browsing shows series whose remaining unread chapters are fully cached.

@@ -663,13 +663,19 @@ impl Kavita {
     }
     // -------------------------------------------------------------------------
     // Library methods
-    pub async fn pull_libraries(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let client = reqwest::Client::new();
-        let response = client
+    async fn request_libraries(
+        &self,
+        client: &reqwest::Client,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        client
             .get(format!("http://{}/api/library/libraries", self.ip))
-            .header("Authorization", format!("Bearer {}", self.token))
+            .bearer_auth(&self.token)
             .send()
-            .await?;
+            .await
+    }
+
+    pub async fn pull_libraries(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let response = self.request_libraries(&reqwest::Client::new()).await?;
 
         if response.status().is_success() {
             let body = response.text().await?;
@@ -731,26 +737,27 @@ impl Kavita {
         self.db.get_series_metadata(series_id).unwrap_or_default()
     }
 
+    async fn request_series(
+        &self,
+        client: &reqwest::Client,
+        library_id: i32,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        client
+            .post(format!("http://{}/api/series/v2", self.ip))
+            .bearer_auth(&self.token)
+            .json(&json!({
+                "statements": [{"comparison": 0, "field": 19, "value": library_id.to_string()}],
+                "combination": 1,
+                "limitTo": 0
+            }))
+            .send()
+            .await
+    }
+
     pub async fn pull_series(&self, library_id: &i32) -> Result<(), Box<dyn std::error::Error>> {
-        // let mut result = Vec::new();
         if !self.offline_mode {
             let client = reqwest::Client::new();
-            let response = client
-                .post(format!("http://{}/api/series/v2", self.ip))
-                .header("Authorization", format!("Bearer {}", self.token))
-                .json(&json!({
-                    "statements": [
-                        {
-                            "comparison": 0,
-                            "field": 19,
-                            "value": library_id.to_string()
-                        }
-                    ],
-                    "combination": 1,
-                    "limitTo": 0
-                }))
-                .send()
-                .await?;
+            let response = self.request_series(&client, *library_id).await?;
             let body = response.text().await?;
             let data: serde_json::Value = serde_json::from_str(&body)?;
             let series: Vec<Series> = data
@@ -807,6 +814,40 @@ impl Kavita {
         Ok(series)
     }
 
+    pub async fn series_ids_for_cover_refresh(
+        &self,
+        client: &reqwest::Client,
+    ) -> Result<Vec<i32>, Box<dyn std::error::Error>> {
+        #[derive(Deserialize)]
+        struct Entry {
+            id: i32,
+        }
+
+        let libraries: Vec<Entry> = self
+            .request_libraries(client)
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let mut seen = HashSet::new();
+        let mut ids = Vec::new();
+        for library in libraries {
+            let series: Vec<Entry> = self
+                .request_series(client, library.id)
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            ids.extend(
+                series
+                    .into_iter()
+                    .map(|entry| entry.id)
+                    .filter(|id| seen.insert(*id)),
+            );
+        }
+        Ok(ids)
+    }
+
     pub async fn get_series_cover(
         &self,
         series_id: &i32,
@@ -820,16 +861,7 @@ impl Kavita {
                 // Migrate/optimize old cached cover file to JPEG thumbnail.
                 if let Ok(bytes) = fs::read(&existing.file) {
                     if let Some(jpg) = optimize_cover_to_jpeg_bytes(&bytes) {
-                        let hash = generate_hash_from_now();
-                        let filename = cache_folder_path().join(format!("{}.jpg", hash));
-                        fs::write(&filename, jpg)?;
-                        let updated = SeriesCover {
-                            series_id: *series_id,
-                            file: filename.to_string_lossy().into_owned(),
-                        };
-                        self.db.add_series_cover(&updated)?;
-                        let _ = fs::remove_file(&existing.file);
-                        return Ok(updated);
+                        return self.save_series_cover(*series_id, &jpg, "jpg");
                     }
                 }
                 // If optimization fails, serve the existing file as-is.
@@ -842,12 +874,31 @@ impl Kavita {
             return Err("Series cover not available offline".into());
         }
 
-        let url = format!(
-            "http://{}/api/image/series-cover?seriesId={}&apiKey={}",
-            self.ip, series_id, self.api_key
-        );
         let client = reqwest::Client::new();
-        let response = client.get(url).header("Accept", "image/*").send().await?;
+        let (body, ext) = self.request_series_cover(&client, *series_id).await?;
+        match optimize_cover_to_jpeg_bytes(&body) {
+            Some(jpg) => self.save_series_cover(*series_id, &jpg, "jpg"),
+            None => self.save_series_cover(*series_id, &body, ext),
+        }
+    }
+
+    async fn request_series_cover(
+        &self,
+        client: &reqwest::Client,
+        series_id: i32,
+    ) -> Result<(Vec<u8>, &'static str), reqwest::Error> {
+        let response = client
+            .get(format!("http://{}/api/image/series-cover", self.ip))
+            .query(&[
+                ("seriesId", series_id.to_string()),
+                ("apiKey", self.api_key.clone()),
+            ])
+            .header(header::ACCEPT, "image/*")
+            .header(header::CACHE_CONTROL, "no-cache")
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(reqwest::Error::without_url)?;
 
         let content_type = response
             .headers()
@@ -856,28 +907,54 @@ impl Kavita {
             .unwrap_or("application/octet-stream")
             .to_string();
 
-        let body = response.bytes().await?;
-
-        let (out_bytes, ext) = if let Some(jpg) = optimize_cover_to_jpeg_bytes(&body) {
-            (jpg, "jpg")
-        } else if content_type.contains("jpeg") {
-            (body.to_vec(), "jpg")
+        let ext = if content_type.contains("jpeg") {
+            "jpg"
         } else if content_type.contains("png") {
-            (body.to_vec(), "png")
+            "png"
         } else {
-            (body.to_vec(), "bin")
+            "bin"
         };
+        let body = response
+            .bytes()
+            .await
+            .map_err(reqwest::Error::without_url)?;
+        Ok((body.to_vec(), ext))
+    }
 
+    pub async fn fetch_series_cover_thumbnail(
+        &self,
+        client: &reqwest::Client,
+        series_id: i32,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let (body, _) = self.request_series_cover(client, series_id).await?;
+        tokio::task::spawn_blocking(move || optimize_cover_to_jpeg_bytes(&body))
+            .await?
+            .ok_or_else(|| "Kavita did not return a supported cover image".into())
+    }
+
+    pub fn save_series_cover(
+        &self,
+        series_id: i32,
+        bytes: &[u8],
+        ext: &str,
+    ) -> Result<SeriesCover, Box<dyn std::error::Error>> {
+        let previous = self.db.get_series_cover(&series_id).ok();
         let hash = generate_hash_from_now();
-        let filename = cache_folder_path().join(format!("{}.{}", hash, ext));
-        fs::write(&filename, out_bytes)?;
-
+        let filename = cache_folder_path().join(format!("{hash}.{ext}"));
         let series_cover = SeriesCover {
-            series_id: *series_id,
+            series_id,
             file: filename.to_string_lossy().into_owned(),
         };
-        self.db.add_series_cover(&series_cover)?;
-
+        let saved = fs::write(&filename, bytes)
+            .map_err(Into::into)
+            .and_then(|()| self.db.add_series_cover(&series_cover));
+        if let Err(err) = saved {
+            let _ = fs::remove_file(filename);
+            return Err(err);
+        }
+        if let Some(previous) = previous {
+            let _ = fs::remove_file(previous.file);
+        }
         Ok(series_cover)
     }
 

@@ -138,6 +138,57 @@ async fn load_series(library_id: i32) -> Result<Vec<Series>, String> {
         .map_err(|err| err.to_string())
 }
 
+async fn refresh_series_covers(mut progress: Signal<Option<String>>) -> Result<String, String> {
+    let shared = kavita();
+    let state = shared.lock().await.clone();
+    if state.offline_mode {
+        return Err("Go online to refresh series covers.".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .build()
+        .map_err(|err| err.to_string())?;
+    let ids = state
+        .series_ids_for_cover_refresh(&client)
+        .await
+        .map_err(|err| format!("Could not list series in Kavita: {err}"))?;
+    let total = ids.len();
+    if total == 0 {
+        return Ok("No series covers to refresh.".into());
+    }
+
+    let mut updated = 0;
+    progress.set(Some(format!("Refreshing series covers… 0 of {total}")));
+    for (index, id) in ids.into_iter().enumerate() {
+        let result = match state.fetch_series_cover_thumbnail(&client, id).await {
+            Ok(bytes) => {
+                let current = shared.lock().await;
+                if current.offline_mode || current.ip != state.ip || current.token != state.token {
+                    return Err("The Kavita connection changed during the cover refresh.".into());
+                }
+                current.save_series_cover(id, &bytes, "jpg")
+            }
+            Err(err) => Err(err),
+        };
+        match result {
+            Ok(_) => updated += 1,
+            Err(err) => {
+                crate::logger::info(&format!("Could not refresh cover for series {id}: {err}"))
+            }
+        }
+        let done = index + 1;
+        progress.set(Some(format!("Refreshing series covers… {done} of {total}")));
+    }
+    if updated == total {
+        Ok(format!("Refreshed {updated} series covers."))
+    } else {
+        let failed = total - updated;
+        Ok(format!(
+            "Refreshed {updated} of {total} series covers. {failed} failed."
+        ))
+    }
+}
+
 async fn load_volumes(series_id: i32) -> Result<Vec<Volume>, String> {
     snapshot()
         .await
@@ -726,6 +777,8 @@ html, body, #main {
 
 fn app() -> Element {
     let mut status = use_signal(|| tokio::runtime::Handle::current().block_on(load_status()));
+    let mut cover_refresh = use_signal(|| None::<String>);
+    let mut cover_revision = use_context_provider(|| Signal::new(0u64));
     let busy = use_signal(|| false);
     let mut page = use_signal(|| Page::Dashboard);
     let mut selected_library = use_signal(|| None::<i32>);
@@ -1071,6 +1124,14 @@ fn app() -> Element {
     };
 
     let on_ember_action = move |action: EmberAction| {
+        if cover_refresh.peek().is_some()
+            && matches!(
+                action,
+                EmberAction::ClearCache | EmberAction::ToggleOffline | EmberAction::Connect(_)
+            )
+        {
+            return;
+        }
         run_ui_action(busy, async move {
             match action {
                 EmberAction::Home => page.set(Page::Dashboard),
@@ -1281,6 +1342,26 @@ fn app() -> Element {
                         format!("Server library update failed: {err}"),
                     ),
                 },
+                EmberAction::RefreshSeriesCovers => {
+                    if cover_refresh.peek().is_some() || status.peek().offline_mode {
+                        return;
+                    }
+                    cover_refresh.set(Some("Finding series in Kavita…".into()));
+                    spawn(async move {
+                        let result = refresh_series_covers(cover_refresh).await;
+                        let next_revision = cover_revision().wrapping_add(1);
+                        cover_revision.set(next_revision);
+                        if let Ok(size) =
+                            tokio::task::spawn_blocking(|| get_cache_size(1024 * 1024)).await
+                        {
+                            status.write().cache_mb = size;
+                        }
+                        cover_refresh.set(None);
+                        let message =
+                            result.unwrap_or_else(|err| format!("Cover refresh stopped. {err}"));
+                        show_toast(&mut status, &mut toast, &mut toast_generation, message);
+                    });
+                }
                 EmberAction::ToggleOffline => {
                     let result = toggle_offline().await;
                     status.set(load_status().await);
@@ -1538,6 +1619,7 @@ fn app() -> Element {
                         Page::Dashboard | Page::Settings | Page::Series | Page::Volumes => rsx! {
                             EmberScreen {
                                 page: page_snapshot, status: status_snapshot.clone(), busy: busy(),
+                                cover_refresh: cover_refresh.read().clone(),
                                 reading: home_read.read().clone(), reading_loading: home_loading(),
                                 downloads: downloaded_series.read().clone(), onaction: on_ember_action,
                                 library_folders: libraries.read().clone(), libraries_loading: libraries_loading(),

@@ -49,6 +49,7 @@ pub(super) enum EmberAction {
     OpenDownload(Series),
     ClearCache,
     Update,
+    RefreshSeriesCovers,
     ToggleOffline,
     Connect(ConnectionCreds),
     Exit,
@@ -72,6 +73,7 @@ pub(super) fn EmberScreen(
     page: Page,
     status: UiStatus,
     busy: bool,
+    cover_refresh: Option<String>,
     reading: Option<HomeRead>,
     reading_loading: bool,
     downloads: Vec<Series>,
@@ -101,6 +103,7 @@ pub(super) fn EmberScreen(
     let settings = page == Page::Settings;
     let library = page == Page::Series;
     let detail = page == Page::Volumes;
+    let refreshing_covers = cover_refresh.is_some();
     let main = view() == View::Main;
     let home = page == Page::Dashboard && main;
     let centered_footer = main && (home || library || detail);
@@ -327,11 +330,14 @@ pub(super) fn EmberScreen(
                             (2, "Update".to_string(), "Update server library".to_string()),
                             (3, "Connection".to_string(), "Server and credentials".to_string()),
                             (4, if status.offline_mode { "Offline" } else { "Online" }.to_string(), if status.offline_mode { "Switch to online" } else { "Switch to offline" }.to_string()),
+                            (6, "Refresh series covers".to_string(), if status.offline_mode { "Connect to Kavita to refresh" } else { "Download fresh previews for every series" }.to_string()),
                             (5, "Exit".to_string(), "Close manga4deck".to_string()),
                         ].into_iter().enumerate() {
                             button {
-                                r#type: "button", class: "ember-action", disabled: busy,
-                                "data-autofocus": if index == 3 { "true" } else { "false" },
+                                r#type: "button", class: "ember-action",
+                                disabled: busy || (index == 6 && status.offline_mode) || (refreshing_covers && matches!(index, 1 | 3 | 4)),
+                                "aria-disabled": index == 6 && refreshing_covers,
+                                "data-autofocus": if (index == 3 && !refreshing_covers) || (index == 6 && refreshing_covers) { "true" } else { "false" },
                                 "data-connection": if index == 3 { "true" } else { "false" },
                                 "data-focus-row": "{position / 3 + 1}", "data-focus-col": "{position % 3}",
                                 onclick: move |_| match index {
@@ -340,6 +346,7 @@ pub(super) fn EmberScreen(
                                     3 => open_connection.call(()),
                                     4 => onaction.call(EmberAction::ToggleOffline),
                                     5 => { confirmation.set(Some(Confirmation::Exit)); },
+                                    6 if !refreshing_covers => onaction.call(EmberAction::RefreshSeriesCovers),
                                     _ => {}
                                 },
                                 strong { "{label}" }
@@ -347,7 +354,10 @@ pub(super) fn EmberScreen(
                             }
                         }
                     }
-                    p { class: "ember-note", "Manage your device and Kavita connection." }
+                    p { class: "ember-note", role: "status",
+                        if let Some(message) = cover_refresh { "{message}" }
+                        else { "Manage your device and Kavita connection." }
+                    }
                 } else if home {
                     if let Some(read) = reading {
                         HomeProgress { key: "{read.volume.id}", read, busy, onaction }
@@ -426,9 +436,37 @@ pub(super) fn EmberScreen(
 }
 
 #[component]
+fn SeriesCoverImage(
+    series_id: i32,
+    title: String,
+    width: u16,
+    height: u16,
+    fallback: &'static str,
+    #[props(default)] lazy: bool,
+) -> Element {
+    let revision_signal = use_context::<Signal<u64>>();
+    let revision = revision_signal();
+    let mut failed = use_signal(|| None);
+    let cover =
+        crate::local_api::media_url(&format!("series-cover/{series_id}?revision={revision}"));
+    rsx! {
+        if failed() == Some((series_id, revision)) {
+            span { "{fallback}" }
+        } else {
+            img {
+                key: "{series_id}-{revision}",
+                src: (!lazy).then(|| cover.clone()),
+                "data-cover-src": lazy.then_some(cover),
+                alt: "{title} cover", width: "{width}", height: "{height}",
+                decoding: if lazy { "async" } else { "auto" },
+                onerror: move |_| failed.set(Some((series_id, revision))),
+            }
+        }
+    }
+}
+
+#[component]
 fn HomeProgress(read: HomeRead, busy: bool, onaction: EventHandler<EmberAction>) -> Element {
-    let mut cover_failed = use_signal(|| false);
-    let cover = crate::local_api::media_url(&format!("series-cover/{}", read.volume.series_id));
     let current = read.volume.read.clamp(0, read.volume.pages.max(0));
     let title = read.volume.title.trim();
     let volume_label = if title.is_empty() {
@@ -446,9 +484,7 @@ fn HomeProgress(read: HomeRead, busy: bool, onaction: EventHandler<EmberAction>)
     rsx! {
         article { class: "ember-resume", "aria-label": "Continue reading",
             div { class: "ember-cover",
-                if !cover_failed() {
-                    img { src: "{cover}", alt: "{read.title} cover", width: "48", height: "72", onerror: move |_| cover_failed.set(true) }
-                } else { span { "No cover" } }
+                SeriesCoverImage { series_id: read.volume.series_id, title: read.title.clone(), width: 48, height: 72, fallback: "No cover" }
             }
             div { class: "ember-reading-copy",
                 h2 { "{read.title}" }
@@ -564,8 +600,6 @@ fn SeriesDetail(
     onvolumefocus: EventHandler<i32>,
     onaction: EventHandler<EmberAction>,
 ) -> Element {
-    let mut cover_failed = use_signal(|| false);
-    let cover = crate::local_api::media_url(&format!("series-cover/{}", item.id));
     let preferred = focused_volume
         .filter(|id| volumes.iter().any(|v| v.id == *id))
         .or_else(|| {
@@ -593,8 +627,7 @@ fn SeriesDetail(
             div { class: "ember-detail-layout",
                 aside { class: "ember-detail-sidebar", "aria-label": "Series information",
                     div { class: "ember-detail-cover",
-                        if cover_failed() { span { "Cover unavailable" } }
-                        else { img { src: cover, alt: "{item.title} cover", width: "240", height: "336", onerror: move |_| cover_failed.set(true) } }
+                        SeriesCoverImage { series_id: item.id, title: item.title.clone(), width: 240, height: 336, fallback: "Cover unavailable" }
                     }
                     if !authors.is_empty() { strong { class: "ember-detail-author", "{authors}" } }
                     p { class: "ember-detail-meta",
@@ -824,8 +857,6 @@ fn LibrarySeriesCard(
     onseriesfocus: EventHandler<i32>,
     onaction: EventHandler<EmberAction>,
 ) -> Element {
-    let mut failed = use_signal(|| false);
-    let cover = crate::local_api::media_url(&format!("series-cover/{}", item.id));
     let id = item.id;
     let open_item = item.clone();
     let progress = item.read.clamp(0, 100);
@@ -837,8 +868,7 @@ fn LibrarySeriesCard(
             onfocus: move |_| onseriesfocus.call(id),
             onclick: move |_| onaction.call(EmberAction::OpenSeries(open_item.clone())),
             div { class: "ember-series-art",
-                if failed() { span { "Cover unavailable" } }
-                else { img { src: cover, alt: "{item.title} cover", width: "228", height: "304", loading: "lazy", onerror: move |_| failed.set(true) } }
+                SeriesCoverImage { series_id: id, title: item.title.clone(), width: 228, height: 304, fallback: "Cover unavailable", lazy: true }
             }
             div {
                 class: "ember-series-progress", role: "progressbar",

@@ -197,6 +197,7 @@
 .ember-series-progress-fill[data-completed="true"] { background: var(--ember-progress-green); }
 .ember-series-art { flex: 0 0 304px; height: 304px; border-radius: 12px; overflow: hidden; display: grid; place-items: center; background: var(--ember-bg); color: var(--ember-muted); }
 .ember-series-art img { display: block; width: 100%; height: 304px; object-fit: cover; }
+.ember-series-art img[data-cover-src]:not([src]) { opacity: 0; }
 .ember-series-info { min-width: 0; display: flex; flex-direction: column; }
 .ember-series-title { overflow: hidden; white-space: nowrap; font-size: 24px; line-height: 30px; font-weight: 600; }
 .ember-series-title-track { display: inline-flex; gap: 32px; width: max-content; }

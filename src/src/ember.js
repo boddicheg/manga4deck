@@ -229,10 +229,6 @@ if (root) await new Promise(resolve => {
             const back = scope().querySelector('[data-back="true"]');
             if (back) back.click();
             else if (seriesDetail) root.querySelector('.ember-detail-back')?.click();
-            else if (root.dataset.emberView === 'Your library') {
-                if (libraryCard) focus(root.querySelector('.ember-series-filter[aria-pressed="true"]'));
-                else tab('home')?.click();
-            }
             else if (root.dataset.emberView === 'Home' && document.activeElement?.closest('.ember-folder')) focus(root.querySelector('.ember-resume button, .ember-empty button') || tab('home'));
             else if (root.dataset.emberView === 'Home') focus(tab('home'));
             else tab('home')?.click();
@@ -274,12 +270,42 @@ if (root) await new Promise(resolve => {
         }
         frame = requestAnimationFrame(poll);
     };
-    const observer = new MutationObserver(updateFocus);
+    // The default root clips targets to both the window and the scrollable library rail.
+    const coverSelector = 'img[data-cover-src]';
+    const coverObserver = new IntersectionObserver(entries => {
+        for (const { target: cover, intersectionRatio } of entries) {
+            if (intersectionRatio < 0.001 || !root.contains(cover)) continue;
+            coverObserver.unobserve(cover);
+            cover.src = cover.dataset.coverSrc;
+        }
+    }, { threshold: 0.001 });
+    const observeCover = cover => {
+        if (root.contains(cover) && !cover.hasAttribute('src')) coverObserver.observe(cover);
+    };
+    const unobserveCover = cover => {
+        if (!root.contains(cover)) coverObserver.unobserve(cover);
+    };
+    const visitCovers = (node, visit) => {
+        if (!(node instanceof Element)) return;
+        if (node.matches(coverSelector)) visit(node);
+        node.querySelectorAll(coverSelector).forEach(visit);
+    };
+    const observer = new MutationObserver(changes => {
+        for (const change of changes) {
+            if (change.type !== 'childList') continue;
+            change.removedNodes.forEach(node => visitCovers(node, unobserveCover));
+            if (root.contains(change.target)) {
+                change.addedNodes.forEach(node => visitCovers(node, observeCover));
+            }
+        }
+        updateFocus();
+    });
     function cleanup() {
         if (stopped) return;
         stopped = true;
         cancelAnimationFrame(frame);
         observer.disconnect();
+        coverObserver.disconnect();
         resize.disconnect();
         document.removeEventListener('keydown', onKey, true);
         root.removeEventListener('focusin', onFocus);
@@ -298,6 +324,7 @@ if (root) await new Promise(resolve => {
     });
     resize.observe(root);
     observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-busy', 'data-ember-view', 'data-series-detail-id', 'disabled'] });
+    visitCovers(root, observeCover);
     updateFocus();
     document.fonts.ready.then(() => { if (root.isConnected) updateTitles(); });
     frame = requestAnimationFrame(poll);
