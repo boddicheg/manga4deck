@@ -3,6 +3,7 @@ name = "manga4deck"
 version = "0.8.1"
 description = "Manga reader for Kavita on Steam Deck"
 authors = ["boddicheg"]
+license = "MIT"
 edition = "2021"
 
 [dependencies]

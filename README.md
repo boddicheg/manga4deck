@@ -5,7 +5,9 @@
 # Manga4Deck
 
 [![GitHub release](https://img.shields.io/github/v/release/boddicheg/manga4deck?label=release&color=bd7858)](https://github.com/boddicheg/manga4deck/releases)
-[![Build](https://github.com/boddicheg/manga4deck/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/boddicheg/manga4deck/actions/workflows/main.yml)
+[![Build status](https://img.shields.io/github/actions/workflow/status/boddicheg/manga4deck/main.yml?branch=main&event=push&label=build)](https://github.com/boddicheg/manga4deck/actions/workflows/main.yml)
+[![GitHub stars](https://img.shields.io/github/stars/boddicheg/manga4deck?style=flat&color=e8af68)](https://github.com/boddicheg/manga4deck/stargazers)
+[![MIT License](https://img.shields.io/badge/license-MIT-6b8e78)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Steam%20Deck-48384f)
 ![Built with Rust and Dioxus](https://img.shields.io/badge/built%20with-Rust%20%2B%20Dioxus-795548)
 
@@ -99,4 +101,6 @@ On Linux and Steam Deck, the app stores settings and downloaded pages in `~/.loc
 
 ## License
 
-Project-wide licensing is unspecified. The bundled assets have separate license notices. [Inter font](src/assets/Inter-LICENSE.txt) · [Lucide icons](src/assets/Lucide-LICENSE.txt)
+Manga4Deck is licensed under the MIT License. [License text](LICENSE)
+
+The bundled assets have separate license notices. [Inter font](src/assets/Inter-LICENSE.txt) · [Lucide icons](src/assets/Lucide-LICENSE.txt)
