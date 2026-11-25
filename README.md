@@ -1,124 +1,70 @@
+<p align="center">
+  <img src="images/manga4deck-banner.png" alt="Manga4Deck illustrated banner" width="800">
+</p>
+
 # Manga4Deck
 
-A manga, manhwa, and PDF reader for Steam Deck and self-hosted Kavita servers, built with Rust and Dioxus.
+[![GitHub release](https://img.shields.io/github/v/release/boddicheg/manga4deck?label=release&color=bd7858)](https://github.com/boddicheg/manga4deck/releases)
+[![Build](https://github.com/boddicheg/manga4deck/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/boddicheg/manga4deck/actions/workflows/main.yml)
+![Platform](https://img.shields.io/badge/platform-Steam%20Deck-48384f)
+![Built with Rust and Dioxus](https://img.shields.io/badge/built%20with-Rust%20%2B%20Dioxus-795548)
 
-- Horizontal library gallery and a volume list for each series
-- Scrolling reader with a page slider
-- Offline reading and progress sync
-
-## Getting started
-
-Install Rust and Cargo, plus the native UI dependencies on Linux.
-
-From the repository root:
-
-```bash
-cargo run --manifest-path src/Cargo.toml
-```
-
-Open **Settings → Connection**, enter your Kavita address as `host:port` (for example, `192.168.1.100:5000`), your credentials and API key, then select **Save & connect**. Connections currently use HTTP.
-
-Leave the password or API key blank to keep its saved value.
-
-## Controls
-
-Map Steam Deck buttons to these keys:
-
-| Action | Key |
-| --- | --- |
-| Activate selected tile | Enter or Space |
-| Go back | Backspace |
-| Move shelf selection | Arrow keys |
-| Scroll reader | Up / Down |
-| Show or move page slider | Left / Right |
-| Toggle focused volume as read/unread (online) | Y or F1 |
-| Manage series downloads | F2 |
-
-The first Left or Right press opens the slider; subsequent presses change the page. You can also tap the page counter and drag the slider. It hides after five seconds of inactivity.
-
-F2 starts a series download, stops an active download, or removes a fully cached series. It works from the library gallery, series detail, and reader.
-
-In series detail, the button shows **Remove downloaded** as soon as any volume is saved. The button and F2 then remove that series' downloaded pages, including partial series downloads, and stop any active download. Removal also works offline.
-
-Home, Library, series detail, and Settings also support standard gamepads directly: the D-pad or left stick moves focus, A opens or applies a filter, B goes back, X opens Downloads, and Y opens Connection from Settings. On a focused library title, X manages its download. In the volume list, Y toggles the focused volume as read/unread; X has no action. With a keyboard, use arrows and Enter/Space, Esc to go back, X for Downloads, and S for Settings. Text fields keep their normal editing keys.
-
-Libraries open with **Unread**, which includes unstarted and partially read series. Switch to **All series**, **Downloaded**, or **Completed** as needed. The series count appears beside **Your library**. Narrow portrait cards show progress below covers: blue for partial progress, green for completed series. Long titles scroll like a bus display when focused or hovered; reduced-motion mode shows wrapped titles. Left/Right browses the full title row; Up moves from titles to filters and then to navigation tabs. Extra titles scroll into view, and your filter and title selection are restored when returning from a volume.
-
-Series sort newest to oldest by when Kavita last added content to them. Dates refresh when you open a library online and are cached for offline browsing. Series without a date appear last; equal dates sort by title. Reading progress does not change this order.
-
-Opening a series shows its cover, author and genres when available, and a scrolling volume list. The first unfinished volume receives focus; if every volume is complete, the first volume receives focus. Use Up/Down to browse, A/Enter to read, B/Esc to return to the library, and Y or F1 to toggle the focused volume as read/unread while online. Use the download button or F2 to manage the series download. Left moves to the download button; Right returns to the volume list. Returning from the reader restores the volume you opened. Author and genre metadata are cached for offline use.
-
-Volume rows show an animated download indicator beside reading progress. It changes to a green **Downloaded** checkmark once every page is saved. A divider separates download status from reading progress; smaller screens show the status icon without its text label. Reduced-motion mode keeps the download indicator still.
-
-Home shows your most recent volume and a horizontal row of your Kavita libraries. **Browse library** takes you to the folders on Home. Use Left/Right or the scroll arrows to browse folders, then A/Enter to open one. Back from the series gallery returns to the selected folder on Home. Settings contains connection status, cache cleanup, server updates, connection details, online/offline mode, and Exit.
-
-Use **Settings → Refresh series covers** while online to download fresh cover thumbnails for every series. Each cached cover is replaced once its new image is ready.
-
-## Offline reading
-
-Download a series before disconnecting, then use **Settings → Online** to switch to offline mode. Downloads skip completed chapters. Offline browsing shows series whose remaining unread chapters are fully cached.
-
-Download failures show the HTTP status and Kavita's message. If extraction fails, check the affected archive and its permissions on the server. The app skips the remaining pages of a failed volume, continues with other volumes, and keeps saved pages for retry.
-
-Progress follows the visible page, and reopening a chapter resumes there. Updates are saved locally before upload; failed uploads are retried on the next page update or reconnect.
-
-PDF reading requires Kavita's rendered PDF image support (`extractPdf=true`). The first page may take longer to render. Multi-chapter volumes appear as separate chapter entries.
-
-On Steam Deck/Linux, settings and cached pages are stored in `~/.local/share/manga4deck-cache/`.
-
-## Build
-
-```bash
-cargo check --manifest-path src/Cargo.toml --locked
-cargo build --manifest-path src/Cargo.toml --release --locked
-```
-
-The app uses authenticated local services on `127.0.0.1:11337` (HTTP) and `127.0.0.1:11338` (WebSocket).
+Manga4Deck is a native Kavita reader built for Steam Deck. Browse your manga, manhwa, comics, and PDFs with a controller, pick up your last volume from Home, and download unread chapters for offline reading.
 
 ## Screenshots
 
-![Dashboard](images/1.png)
+**Library gallery**
 
-![Series shelf](images/2.png)
+![The Manga4Deck library gallery with cover art, progress bars, and series filters](images/library-gallery.png)
 
-![Reader](images/3.png)
-
-## Features
-
-- Steam Deck friendly shelf UI
-- Kavita library, series, volume, and page browsing
-- Offline/cache-aware volume and series state
-- Cover thumbnails cached as small JPEGs for faster shelf loading
-- Reader with batch page loading
-- PDF books displayed as page images in the same scrolling reader, with progress and offline caching
-- Keyboard and Steam Deck controller friendly navigation
-
-## Controls
-
-Recommended Steam Deck keyboard mappings:
-
-| Action | Key |
+| Home | Series detail |
 | --- | --- |
-| Activate selected tile | Enter |
-| Go back | Backspace |
-| Move selection on shelves | Arrow keys |
-| Scroll reader | Up / Down |
-| Show and move reader page slider | Left / Right |
+| ![Home with a Continue reading card and Kavita libraries](images/home.png) | ![Series detail showing chapter progress and downloaded volumes](images/series-detail.png) |
 
-Reader behavior:
+<details>
+<summary>Reader screenshot</summary>
 
-- Up and Down scroll the page.
-- First Left or Right press shows the page slider.
-- While the slider is visible, Left and Right change the selected page.
-- The slider hides 5 seconds after the last Left or Right press.
+![The Manga4Deck reader showing a manga page and the page slider](images/reader.png)
 
-## Development
+</details>
 
-### Requirements
+## Usage
 
-- Rust and Cargo
-- Node.js LTS and npm
-- Linux packages required by the native UI stack, for example on Ubuntu:
+### Connect to Kavita
+
+1. Download the x86_64 AppImage from [GitHub Releases](https://github.com/boddicheg/manga4deck/releases). Mark it executable and launch it in Steam Deck Desktop Mode.
+2. Open **Settings → Connection**. Enter your Kavita address as `host:port`, your username and password, and your API key.
+3. Select **Save & connect**, then open a folder under **Home → Your libraries**.
+
+Manga4Deck connects over HTTP. In **Connection**, leave the password or API key field blank to keep its saved value.
+
+### Browse and read
+
+- Libraries open with **Unread** selected and focus on the first visible title. Switch to **All series**, **Downloaded**, or **Completed** in the filter row. Series with the newest chapter additions appear first, and covers load as they come into view.
+- Open a series to pick a volume. Manga4Deck focuses the first unfinished volume and restores your page when you reopen it.
+- Use **Settings → Refresh series covers** to refresh cover thumbnails across your Kavita libraries.
+
+| Action | Keyboard | Gamepad |
+| --- | --- | --- |
+| Move focus | Arrow keys | D-pad or left stick |
+| Open a title or apply a filter | Enter or Space | A |
+| Go back from a gallery, series detail, or Settings | Backspace or Esc | B |
+| Open Downloads from Home or Settings | X | X |
+| Manage a focused series download | F2 | X on a library title |
+| Mark a focused volume read or unread while online | F1 or Y | Y in the volume list |
+| Open Connection from Settings | Y | Y |
+
+In the reader, use Up and Down to scroll and Backspace to return to the volume list. Press Left or Right once to show the page slider, then press again to change pages. You can also click the page counter and drag the slider. The slider hides after five seconds of inactivity. In Steam Input, map the reader controls to these keyboard keys.
+
+### Read offline
+
+Download a series from its detail screen before disconnecting. Downloads skip completed chapters. Open **Downloads** to see saved volumes, or select the **Online** tile in Settings to switch to offline mode. Progress is saved locally and retried when you reconnect.
+
+Kavita renders PDF pages through its reader image API. PDF reading and downloads require server support for `extractPdf=true`.
+
+## Build
+
+Install Rust and Cargo. On Ubuntu, install the native dependencies:
 
 ```bash
 sudo apt-get update
@@ -133,42 +79,24 @@ sudo apt-get install -y \
   pkg-config
 ```
 
-### Install dependencies
+From the repository root:
 
 ```bash
-npm ci
+cargo run --manifest-path src/Cargo.toml --locked
+cargo test --manifest-path src/Cargo.toml --locked
+cargo build --manifest-path src/Cargo.toml --release --locked
 ```
 
-### Run Manga4Deck
+The release binary is written to `src/target/release/manga4deck`. For a versioned AppImage release, run **Build and Release Manga4Deck** from the GitHub Actions tab on `main` and enter the release version.
 
-```bash
-npm run manga4deck
-```
+On Linux and Steam Deck, the app stores settings and downloaded pages in `~/.local/share/manga4deck-cache/`. Its authenticated local services use `127.0.0.1:11337` for HTTP and `127.0.0.1:11338` for WebSocket events.
 
-This starts the Rust backend HTTP API and launches the native Manga4Deck UI.
+## Credits
 
-### Build/check
+- Manga4Deck by [boddicheg](https://github.com/boddicheg) and the [project contributors](https://github.com/boddicheg/manga4deck/graphs/contributors).
+- Built with [Rust](https://www.rust-lang.org/) and [Dioxus](https://dioxuslabs.com/) for [Kavita](https://www.kavitareader.com/).
+- The screenshots were captured from the native app with a sample library and original demo artwork.
 
-Check the Manga4Deck build:
+## License
 
-```bash
-cargo check --manifest-path src/Cargo.toml
-```
-
-Build the Manga4Deck binary:
-
-```bash
-cargo build --manifest-path src/Cargo.toml
-```
-
-## Kavita
-
-Manga4Deck expects access to a Kavita server. Server IP, username/password, and API key are stored by the app settings UI.
-
-PDF pages are rendered by Kavita using its reader image API (`extractPdf=true`) and cached locally like manga pages. Your Kavita version must support this option. The first page can take longer while the server renders the book. No local PDF renderer is needed. Cache a series before disconnecting to read its PDF pages offline.
-
-The local backend listens on:
-
-```text
-0.0.0.0:11337
-```
+Project-wide licensing is unspecified. The bundled assets have separate license notices. [Inter font](src/assets/Inter-LICENSE.txt) · [Lucide icons](src/assets/Lucide-LICENSE.txt)
