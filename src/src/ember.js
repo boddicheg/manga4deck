@@ -15,6 +15,8 @@ if (root) await new Promise(resolve => {
     const visible = el => !el.disabled && el.getClientRects().length > 0;
     const scope = () => root.querySelector('.ember-dialog') || root;
     const controls = () => [...scope().querySelectorAll('button, input')].filter(visible);
+    const tab = name => root.querySelector(`[data-nav="${name}"]`);
+    const preferredFolder = () => root.querySelector('.ember-folder[data-autofocus="true"]');
     const focus = el => {
         if (!el || !visible(el)) return;
         el.focus({ preventScroll: true });
@@ -47,6 +49,10 @@ if (root) await new Promise(resolve => {
         root.querySelector('[data-library-scroll="next"]')?.setAttribute('aria-disabled', String(rail.scrollLeft + rail.clientWidth >= rail.scrollWidth - 1));
     };
     const onCarouselClick = event => {
+        if (event.target.closest('[data-browse-library]')) {
+            focus(preferredFolder());
+            return;
+        }
         if (event.target.closest('[data-series-download]')) {
             if (!event.target.closest('button').disabled) root.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', code: 'F2', bubbles: true, cancelable: true }));
             return;
@@ -94,7 +100,6 @@ if (root) await new Promise(resolve => {
         if (!controls().includes(current)) { updateFocus(); return; }
         const folder = current.closest('.ember-folder');
         const home = root.dataset.emberView === 'Home';
-        const folders = root.dataset.emberView === 'Your libraries';
         const library = root.dataset.emberView === 'Your library';
         const seriesCard = current.closest('.ember-series-card');
         const filter = current.closest('.ember-series-filter');
@@ -108,7 +113,7 @@ if (root) await new Promise(resolve => {
             const chosen = lastVolume?.isConnected ? lastVolume : root.querySelector('.ember-volume-row[data-autofocus="true"], .ember-volume-row');
             if (row) {
                 if (key === 'ArrowDown') focus(rows[rows.indexOf(row) + 1]);
-                else if (key === 'ArrowUp') focus(rows[rows.indexOf(row) - 1] || root.querySelector('[data-nav="1"]'));
+                else if (key === 'ArrowUp') focus(rows[rows.indexOf(row) - 1] || tab('home'));
                 else if (key === 'ArrowLeft') focus(download);
                 return;
             }
@@ -119,7 +124,7 @@ if (root) await new Promise(resolve => {
             }
             if (current === breadcrumb) {
                 if (key === 'ArrowDown' || key === 'ArrowRight') focus(chosen || download);
-                else if (key === 'ArrowUp') focus(root.querySelector('[data-nav="1"]'));
+                else if (key === 'ArrowUp') focus(tab('home'));
                 return;
             }
             if (current.closest('.ember-nav') && key === 'ArrowDown') { focus(chosen || breadcrumb); return; }
@@ -136,30 +141,27 @@ if (root) await new Promise(resolve => {
                 if (key === 'ArrowLeft' || key === 'ArrowRight') {
                     const list = [...root.querySelectorAll('.ember-series-filter')];
                     focus(list[list.indexOf(filter) + (key === 'ArrowLeft' ? -1 : 1)]);
-                } else if (key === 'ArrowUp') focus(root.querySelector('[data-nav="1"]'));
+                } else if (key === 'ArrowUp') focus(tab('home'));
                 else if (key === 'ArrowDown') focus(chosenSeries || root.querySelector('.ember-series-library .ember-empty button'));
                 return;
             }
             if (current.closest('.ember-nav') && key === 'ArrowDown') { focus(activeFilter); return; }
         }
         const reading = root.querySelector('.ember-resume button, .ember-empty button');
-        const chosenFolder = lastFolder?.isConnected ? lastFolder : root.querySelector('.ember-folder[data-autofocus="true"]');
+        const chosenFolder = lastFolder?.isConnected ? lastFolder : preferredFolder();
         const retry = root.querySelector('.ember-library-error button');
-        const libraryTab = root.querySelector('[data-nav="1"]');
         if (folder) {
             if (key === 'ArrowLeft' || key === 'ArrowRight') {
                 const list = [...folder.parentElement.querySelectorAll('.ember-folder')];
                 focus(list[list.indexOf(folder) + (key === 'ArrowLeft' ? -1 : 1)]);
                 return;
             }
-            if (key === 'ArrowUp') { focus(folders ? libraryTab : reading || root.querySelector('[data-nav="0"]')); return; }
+            if (key === 'ArrowUp') { focus(reading || tab('home')); return; }
             if (key === 'ArrowDown') { focus(retry); return; }
         }
-        if (folders && current === retry && key === 'ArrowUp') { focus(chosenFolder || libraryTab); return; }
-        if (folders && current.closest('.ember-nav') && key === 'ArrowDown') { focus(chosenFolder || retry); return; }
         if (home && current === reading && key === 'ArrowDown' && chosenFolder) { focus(chosenFolder); return; }
-        if (home && current === reading && key === 'ArrowUp') { focus(root.querySelector('[data-nav="0"]')); return; }
-        if (home && current.closest('.ember-nav') && key === 'ArrowDown') { focus(reading || chosenFolder); return; }
+        if (home && current === reading && key === 'ArrowUp') { focus(tab('home')); return; }
+        if (home && current.closest('.ember-nav') && key === 'ArrowDown') { focus(reading || chosenFolder || retry); return; }
         const rect = current.getBoundingClientRect();
         const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
         const horizontal = key === 'ArrowLeft' || key === 'ArrowRight';
@@ -229,15 +231,15 @@ if (root) await new Promise(resolve => {
             else if (seriesDetail) root.querySelector('.ember-detail-back')?.click();
             else if (root.dataset.emberView === 'Your library') {
                 if (libraryCard) focus(root.querySelector('.ember-series-filter[aria-pressed="true"]'));
-                else root.querySelector('.ember-series-back')?.click();
+                else tab('home')?.click();
             }
-            else if (root.dataset.emberView === 'Home' && document.activeElement?.closest('.ember-folder')) focus(root.querySelector('.ember-resume button, .ember-empty button') || root.querySelector('[data-nav="0"]'));
-            else if (root.dataset.emberView === 'Home') focus(root.querySelector('[data-nav="0"]'));
-            else root.querySelector('[data-nav="0"]')?.click();
+            else if (root.dataset.emberView === 'Home' && document.activeElement?.closest('.ember-folder')) focus(root.querySelector('.ember-resume button, .ember-empty button') || tab('home'));
+            else if (root.dataset.emberView === 'Home') focus(tab('home'));
+            else tab('home')?.click();
         } else if (!dialog && (key.toLowerCase() === 'x' || key === 'F2')) {
-            root.querySelector('[data-nav="2"]')?.click();
+            tab('downloads')?.click();
         } else if (!dialog && key.toLowerCase() === 's') {
-            root.querySelector('[data-nav="3"]')?.click();
+            tab('settings')?.click();
         } else if (!dialog && key.toLowerCase() === 'y') {
             root.querySelector('[data-connection="true"]')?.click();
         } else return;

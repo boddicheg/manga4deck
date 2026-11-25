@@ -50,7 +50,7 @@ Opening a series shows its cover, author and genres when available, and a scroll
 
 Volume rows show an animated download indicator beside reading progress. It changes to a green **Downloaded** checkmark once every page is saved. A divider separates download status from reading progress; smaller screens show the status icon without its text label. Reduced-motion mode keeps the download indicator still.
 
-Home shows your most recent volume and a horizontal row of your Kavita libraries. The Library tab and **Browse library** buttons open the same folder carousel in a dedicated view. Use Left/Right or the scroll arrows to browse folders, then A/Enter to open one. Back from the series gallery returns to the selected folder on Home or Library, depending on where you opened it. Settings contains connection status, cache cleanup, server updates, connection details, online/offline mode, and Exit.
+Home shows your most recent volume and a horizontal row of your Kavita libraries. **Browse library** takes you to the folders on Home. Use Left/Right or the scroll arrows to browse folders, then A/Enter to open one. Back from the series gallery returns to the selected folder on Home. Settings contains connection status, cache cleanup, server updates, connection details, online/offline mode, and Exit.
 
 ## Offline reading
 

@@ -25,7 +25,6 @@ const READER_BATCH_SIZE: i32 = 10;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Page {
     Dashboard,
-    Libraries,
     Series,
     Volumes,
     Reader,
@@ -730,7 +729,6 @@ fn app() -> Element {
     let busy = use_signal(|| false);
     let mut page = use_signal(|| Page::Dashboard);
     let mut selected_library = use_signal(|| None::<i32>);
-    let mut library_origin = use_signal(|| Page::Libraries);
     let mut series_selection = use_signal(|| 0usize);
     let mut series_filter = use_signal(SeriesFilter::default);
     let mut volumes_selection = use_signal(|| 0usize);
@@ -796,7 +794,7 @@ fn app() -> Element {
         let _refresh = libraries_refresh();
         let generation = (*libraries_generation.peek()).wrapping_add(1);
         libraries_generation.set(generation);
-        if !matches!(current, Page::Dashboard | Page::Libraries) {
+        if current != Page::Dashboard {
             return;
         }
         libraries_loading.set(true);
@@ -1077,11 +1075,9 @@ fn app() -> Element {
             match action {
                 EmberAction::Home => page.set(Page::Dashboard),
                 EmberAction::Settings => page.set(Page::Settings),
-                EmberAction::Library => page.set(Page::Libraries),
                 EmberAction::OpenLibrary(library) => match load_series(library.id).await {
                     Ok(items) => {
                         selected_library.set(Some(library.id));
-                        library_origin.set(page());
                         series.set(items);
                         series_selection.set(0);
                         series_filter.set(SeriesFilter::Unread);
@@ -1151,7 +1147,6 @@ fn app() -> Element {
                     }
                     page.set(Page::Series);
                 }
-                EmberAction::BackFromLibrary => page.set(library_origin()),
                 EmberAction::RefreshLibraries => {
                     libraries_refresh.set(libraries_refresh().wrapping_add(1));
                 }
@@ -1164,7 +1159,6 @@ fn app() -> Element {
                     );
                     match context {
                         (Ok(libs), Ok(items), Ok(siblings)) => {
-                            library_origin.set(Page::Dashboard);
                             series_filter.set(SeriesFilter::Unread);
                             selected_library.set(Some(read.library_id));
                             series_selection.set(
@@ -1204,7 +1198,6 @@ fn app() -> Element {
                     let state = snapshot().await;
                     match state.get_cached_volumes(&item.id) {
                         Ok(items) if !items.is_empty() => {
-                            library_origin.set(Page::Libraries);
                             series_filter.set(SeriesFilter::Downloaded);
                             selected_library.set(Some(item.library_id));
                             if let Ok(libs) = state.db.get_libraries() {
@@ -1322,7 +1315,7 @@ fn app() -> Element {
                     Page::Series => key == "F2",
                     Page::Volumes => matches!(key.as_str(), "F1" | "F2"),
                     Page::Reader => matches!(key.as_str(), "F2" | "Backspace"),
-                    Page::Dashboard | Page::Libraries | Page::Settings => false,
+                    Page::Dashboard | Page::Settings => false,
                 };
                 if !reader_arrow && !command { return; }
                 event.prevent_default();
@@ -1421,7 +1414,7 @@ fn app() -> Element {
                                     .read()
                                     .as_ref()
                                     .map(|item| (item.series_id, "this series".to_string(), selected_library())),
-                                Page::Dashboard | Page::Libraries | Page::Settings => None,
+                                Page::Dashboard | Page::Settings => None,
                             };
 
                             if let Some((series_id, title, library_id)) = current_series {
@@ -1542,7 +1535,7 @@ fn app() -> Element {
             div { class: "tiles",
                 {
                     match page_snapshot {
-                        Page::Dashboard | Page::Libraries | Page::Settings | Page::Series | Page::Volumes => rsx! {
+                        Page::Dashboard | Page::Settings | Page::Series | Page::Volumes => rsx! {
                             EmberScreen {
                                 page: page_snapshot, status: status_snapshot.clone(), busy: busy(),
                                 reading: home_read.read().clone(), reading_loading: home_loading(),

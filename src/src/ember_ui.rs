@@ -39,12 +39,10 @@ pub(super) struct HomeRead {
 #[derive(Clone)]
 pub(super) enum EmberAction {
     Home,
-    Library,
     OpenLibrary(Library),
     OpenSeries(Series),
     OpenVolume(Volume),
     BackFromSeries,
-    BackFromLibrary,
     RefreshLibraries,
     Settings,
     Resume(HomeRead),
@@ -105,18 +103,15 @@ pub(super) fn EmberScreen(
     let detail = page == Page::Volumes;
     let main = view() == View::Main;
     let home = page == Page::Dashboard && main;
-    let library_folders_page = page == Page::Libraries && main;
-    let centered_footer = home || library_folders_page || ((library || detail) && main);
+    let centered_footer = main && (home || library || detail);
     let connection = view() == View::Connection;
     let showing_downloads = view() == View::Downloads;
     let active_nav = if showing_downloads {
-        2
+        "downloads"
+    } else if settings {
+        "settings"
     } else {
-        match page {
-            Page::Libraries | Page::Series | Page::Volumes => 1,
-            Page::Settings => 3,
-            _ => 0,
-        }
+        "home"
     };
     let series_count = series_items
         .iter()
@@ -126,8 +121,6 @@ pub(super) fn EmberScreen(
         "Connection settings"
     } else if showing_downloads {
         "Downloads"
-    } else if library_folders_page {
-        "Your libraries"
     } else if library {
         "Your library"
     } else if detail {
@@ -176,23 +169,21 @@ pub(super) fn EmberScreen(
             header { class: "ember-header",
                 div { class: "ember-brand", "manga4deck" }
                 nav { class: "ember-nav", "aria-label": "Main navigation",
-                    for (index, label) in ["Home", "Library", "Downloads", "Settings"].into_iter().enumerate() {
+                    for (tab, label) in [("home", "Home"), ("downloads", "Downloads"), ("settings", "Settings")] {
                         button {
                             r#type: "button",
                             class: "ember-nav-item",
-                            "aria-current": if index == active_nav { "page" } else { "false" },
-                            "data-nav": "{index}",
-                            "data-focus-row": "0", "data-focus-col": "{index}",
+                            "aria-current": if tab == active_nav { "page" } else { "false" },
+                            "data-nav": tab,
                             disabled: busy,
                             onclick: move |_| {
                                 confirmation.set(None);
                                 password.set(String::new());
                                 api_key.set(String::new());
-                                view.set(if index == 2 { View::Downloads } else { View::Main });
-                                match index {
-                                    0 => onaction.call(EmberAction::Home),
-                                    1 => onaction.call(EmberAction::Library),
-                                    3 => onaction.call(EmberAction::Settings),
+                                view.set(if tab == "downloads" { View::Downloads } else { View::Main });
+                                match tab {
+                                    "home" => onaction.call(EmberAction::Home),
+                                    "settings" => onaction.call(EmberAction::Settings),
                                     _ => {}
                                 }
                             },
@@ -201,20 +192,20 @@ pub(super) fn EmberScreen(
                     }
                 }
                 div { class: "ember-connection",
-                    if settings || library_folders_page || library || detail || showing_downloads {
+                    if settings || library || detail || showing_downloads {
                         if library || detail { img { class: "ember-status-dot", src: ONLINE_ICON.as_str(), width: "8", height: "8", alt: "", "aria-hidden": "true" } }
                         else { span { class: "ember-status-dot", "aria-hidden": "true" } }
                         if status.offline_mode { "Offline mode" } else if status.logged_as.is_empty() { "Not signed in" } else { "Kavita online" }
                     }
                 }
             }
-            main { class: "ember-content", "aria-labelledby": if library_folders_page { "ember-libraries-title" } else { "ember-title" },
+            main { class: "ember-content", "aria-labelledby": "ember-title",
                 if library && main {
                     div { class: "ember-series-heading",
                         h1 { id: "ember-title", "{title}" }
                         span { class: "ember-series-count", "aria-live": "polite", "{series_count} series" }
                     }
-                } else if !library_folders_page {
+                } else {
                     h1 { id: "ember-title", class: if detail { "ember-detail-title" } else { "" }, "{title}" }
                 }
                 if showing_downloads {
@@ -225,7 +216,7 @@ pub(super) fn EmberScreen(
                             button {
                                 class: "ember-primary", r#type: "button", disabled: busy,
                                 "data-autofocus": "true", "data-focus-row": "1", "data-focus-col": "0",
-                                onclick: move |_| { view.set(View::Main); onaction.call(EmberAction::Library); },
+                                onclick: move |_| { view.set(View::Main); onaction.call(EmberAction::Home); },
                                 "Browse library"
                             }
                         }
@@ -365,20 +356,19 @@ pub(super) fn EmberScreen(
                             h2 { if reading_loading { "Loading your reading progress…" } else { "Your next volume is waiting." } }
                             if !reading_loading {
                                 p { "Start a volume from your library. Your reading progress will appear here." }
-                                button {
-                                    class: "ember-primary", r#type: "button", disabled: busy,
-                                    "data-autofocus": "true", "data-focus-row": "1", "data-focus-col": "0",
-                                    onclick: move |_| onaction.call(EmberAction::Library),
-                                    "Browse library"
+                                if !library_folders.is_empty() {
+                                    button {
+                                        class: "ember-primary", r#type: "button", disabled: busy,
+                                        "data-browse-library": "true", "aria-controls": "ember-library-rail",
+                                        "Browse library"
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                if home || library_folders_page {
                     LibraryFolders {
                         folders: library_folders, busy, loading: libraries_loading, error: libraries_error,
-                        standalone: library_folders_page, focused_library, onaction,
+                        focused_library, onaction,
                     }
                 }
             }
@@ -493,7 +483,6 @@ fn LibraryFolders(
     busy: bool,
     loading: bool,
     error: bool,
-    standalone: bool,
     focused_library: Option<i32>,
     onaction: EventHandler<EmberAction>,
 ) -> Element {
@@ -505,11 +494,7 @@ fn LibraryFolders(
         section { class: "ember-library-folders", "aria-labelledby": "ember-libraries-title",
             header { class: "ember-library-heading",
                 div { class: "ember-library-heading-copy",
-                    if standalone {
-                        h1 { id: "ember-libraries-title", "Your libraries" }
-                    } else {
-                        h2 { id: "ember-libraries-title", "Your libraries" }
-                    }
+                    h2 { id: "ember-libraries-title", "Your libraries" }
                     span { class: "ember-library-count", "aria-live": "polite",
                         if loading && count == 0 { "Loading…" }
                         else if count == 1 { "1 folder" }
@@ -544,9 +529,7 @@ fn LibraryFolders(
                         }
                     }
                 }
-                if !standalone {
-                    p { class: "ember-carousel-hint", "Left / Right to browse · A to open" }
-                }
+                p { class: "ember-carousel-hint", "Left / Right to browse · A to open" }
             } else if loading {
                 p { class: "ember-library-placeholder", role: "status", "Loading your libraries…" }
             } else if !error {
@@ -557,7 +540,6 @@ fn LibraryFolders(
                     p { if count > 0 { "Could not refresh libraries. Showing saved folders." } else { "Could not load libraries. Check your connection and try again." } }
                     button {
                         class: "ember-secondary", r#type: "button", disabled: busy || loading,
-                        "data-autofocus": if standalone && count == 0 { "true" } else { "false" },
                         onclick: move |_| onaction.call(EmberAction::RefreshLibraries), "Retry"
                     }
                 }
@@ -828,7 +810,6 @@ fn LibrarySeries(
                     }
                 }
             }
-            button { class: "ember-series-back", hidden: true, r#type: "button", onclick: move |_| onaction.call(EmberAction::BackFromLibrary), "Back" }
         }
     }
 }
