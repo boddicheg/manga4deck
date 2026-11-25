@@ -2636,7 +2636,7 @@ dependencies = [
 
 [[package]]
 name = "manga4deck"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "axum",
  "base64",
