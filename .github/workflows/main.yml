@@ -1,22 +1,75 @@
-name: compile
+name: Build and Release Manga4Deck
 
 on:
   push:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (for example, 0.8.1 or 0.8.1-rc.1)
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-manga4deck:
     name: Build Manga4Deck
     runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set build version
+        id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          manifest = Path("src/Cargo.toml")
+          manifest_text = manifest.read_text()
+          manifest_version = re.search(r'^\[package\]\nname = "manga4deck"\nversion = "([^"]+)"$', manifest_text, re.M)
+          if not manifest_version:
+              raise SystemExit("Could not find the Manga4Deck package version in Cargo.toml.")
+
+          version = manifest_version[1]
+          if os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch":
+              version = os.environ["RELEASE_VERSION"].strip().removeprefix("v")
+              number = r"(?:0|[1-9][0-9]*)"
+              prerelease = rf"(?:{number}|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+              build = r"[0-9A-Za-z-]+"
+              semver = rf"{number}\.{number}\.{number}(?:-{prerelease}(?:\.{prerelease})*)?(?:\+{build}(?:\.{build})*)?"
+              if not re.fullmatch(semver, version):
+                  raise SystemExit("Enter a version such as 0.8.1 or 0.8.1-rc.1.")
+
+              lock = Path("src/Cargo.lock")
+              lock_text = lock.read_text()
+              lock_version = re.search(r'^\[\[package\]\]\nname = "manga4deck"\nversion = "([^"]+)"$', lock_text, re.M)
+              if not lock_version:
+                  raise SystemExit("Could not find the Manga4Deck package version in Cargo.lock.")
+
+              # Stamp only this build's Cargo package entries to keep the lockfile usable.
+              for path, text, match in ((manifest, manifest_text, manifest_version), (lock, lock_text, lock_version)):
+                  start, end = match.span(1)
+                  path.write_text(text[:start] + version + text[end:])
+
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              env.write(f"APP_VERSION={version}\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"version={version}\n")
+          PY
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -38,14 +91,11 @@ jobs:
             wget
 
       - name: Build Manga4Deck binary
-        run: cargo build --manifest-path src/Cargo.toml --release
+        run: cargo build --manifest-path src/Cargo.toml --release --locked
 
       - name: Create AppDir
         run: |
           set -eux
-          VERSION="$(grep '^version =' src/Cargo.toml | head -n1 | cut -d '"' -f2)"
-          echo "APP_VERSION=${VERSION}" >> "$GITHUB_ENV"
-
           mkdir -p AppDir/usr/bin
           mkdir -p AppDir/usr/share/applications
           mkdir -p AppDir/usr/share/icons/hicolor/128x128/apps
@@ -112,24 +162,46 @@ jobs:
         with:
           name: Manga4Deck-AppImage
           path: artifacts/*.AppImage
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: build-manga4deck
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download AppImage
+        uses: actions/download-artifact@v4
+        with:
+          name: Manga4Deck-AppImage
+          path: artifacts
 
       - name: Publish GitHub Release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          APP_VERSION: ${{ needs.build-manga4deck.outputs.version }}
         run: |
-          set -eux
+          set -euo pipefail
           TAG="v${APP_VERSION}"
           TITLE="Manga4Deck v${APP_VERSION}"
+          APPIMAGE="artifacts/Manga4Deck-${APP_VERSION}-x86_64.AppImage"
+          test -f "$APPIMAGE"
 
-          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
-            git tag "$TAG"
-            git push origin "$TAG"
+          if ! gh api --method POST "repos/${GH_REPO}/git/refs" -f ref="refs/tags/${TAG}" -f sha="$GITHUB_SHA" >/dev/null; then
+            TAG_SHA="$(gh api "repos/${GH_REPO}/commits/tags/${TAG}" --jq .sha)"
+            if [[ "$TAG_SHA" != "$GITHUB_SHA" ]]; then
+              echo "::error::Tag ${TAG} points to a different commit. Choose a new version."
+              exit 1
+            fi
           fi
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" artifacts/*.AppImage --clobber
-            gh release edit "$TAG" --title "$TITLE"
-          else
-            gh release create "$TAG" artifacts/*.AppImage --title "$TITLE" --notes "$TITLE"
+          RELEASE_FLAGS=(--verify-tag)
+          if [[ "${APP_VERSION%%+*}" == *-* ]]; then
+            RELEASE_FLAGS+=(--prerelease)
           fi
+          gh release create "$TAG" "$APPIMAGE" --title "$TITLE" --notes "$TITLE" "${RELEASE_FLAGS[@]}"
